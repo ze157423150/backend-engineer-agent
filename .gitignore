@@ -1,0 +1,46 @@
+# Maven
+target/
+**/target/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# VS Code
+.vscode/
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Application local config
+application-local.yml
+application-local.yaml
+application-local.properties
+
+# Runtime data
+data/
+tmp/
+
+# Docker local volumes
+postgres-data/
+redis-data/
+
+# Java
+*.class
