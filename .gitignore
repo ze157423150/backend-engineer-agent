@@ -33,8 +33,10 @@ logs/
 application-local.yml
 application-local.yaml
 application-local.properties
+agent-local.properties
 
 # Runtime data
+.agent-sessions/
 data/
 tmp/
 

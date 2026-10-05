@@ -1,0 +1,7 @@
+# Save a copy as agent-local.properties and fill the key in your editor.
+# Leave the key blank to use DEEPSEEK_API_KEY instead.
+model.api-key=
+model.base-url=https://api.deepseek.com
+model.name=deepseek-flash
+model.connect-timeout-seconds=15
+model.request-timeout-seconds=90
