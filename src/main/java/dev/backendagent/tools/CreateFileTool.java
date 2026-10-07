@@ -5,10 +5,10 @@ import dev.backendagent.model.ToolResult;
 import dev.backendagent.runtime.AgentSession;
 
 public final class CreateFileTool implements Tool {
-    private final Workspace workspace;
+    private final WorkspaceAccess workspace;
     private final AgentSession session;
 
-    public CreateFileTool(Workspace workspace, AgentSession session) {
+    public CreateFileTool(WorkspaceAccess workspace, AgentSession session) {
         this.workspace = workspace;
         this.session = session;
     }

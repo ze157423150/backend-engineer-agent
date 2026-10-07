@@ -9,9 +9,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.backendagent.memory.MemoryFact;
 import dev.backendagent.model.ToolExchange;
 import dev.backendagent.runtime.AgentSession;
+import dev.backendagent.runtime.ContextProjection;
+import dev.backendagent.runtime.ContextSummary;
+import dev.backendagent.runtime.WorkspaceState;
 
 /** A complete tool-batch boundary; this first version resumes only budget stops. */
 public final class SessionCheckpoint {
+    private final ContextProjection contextProjection;
+    private final ContextSummary contextSummary;
+    private final WorkspaceState workspaceState;
     private final int schemaVersion;
     private final UUID sessionId;
     private final String objective;
@@ -20,11 +26,32 @@ public final class SessionCheckpoint {
     private final long lastEventSequence;
     private final List<ToolExchange> history;
     private final List<MemoryFact> workingMemory;
+    private final List<dev.backendagent.history.HistoricalEvidence> historicalEvidence;
     private final Set<String> staleEvidenceIds;
     private final String workspacePath;
     private final Map<String, String> workspaceHashes;
     private final Map<String, String> originalContents;
     private final Set<String> createdFiles;
+
+    public SessionCheckpoint(int schemaVersion, UUID sessionId, String objective,
+            AgentSession.Status status, int modelCalls, long lastEventSequence,
+            List<ToolExchange> history, List<MemoryFact> workingMemory, Set<String> staleEvidenceIds,
+            String workspacePath, Map<String, String> workspaceHashes, Map<String, String> originalContents,
+            Set<String> createdFiles, ContextProjection contextProjection, ContextSummary contextSummary) {
+        this(schemaVersion, sessionId, objective, status, modelCalls, lastEventSequence, history, workingMemory,
+                staleEvidenceIds, workspacePath, workspaceHashes, originalContents, createdFiles,
+                contextProjection, contextSummary, WorkspaceState.fromHistory(history));
+    }
+
+    public SessionCheckpoint(int schemaVersion, UUID sessionId, String objective, AgentSession.Status status,
+            int modelCalls, long lastEventSequence, List<ToolExchange> history, List<MemoryFact> workingMemory,
+            Set<String> staleEvidenceIds, String workspacePath, Map<String,String> workspaceHashes,
+            Map<String,String> originalContents, Set<String> createdFiles, ContextProjection contextProjection,
+            ContextSummary contextSummary, WorkspaceState workspaceState) {
+        this(schemaVersion, sessionId, objective, status, modelCalls, lastEventSequence, history, workingMemory,
+                staleEvidenceIds, workspacePath, workspaceHashes, originalContents, createdFiles,
+                contextProjection, contextSummary, workspaceState, List.of());
+    }
 
     @JsonCreator
     public SessionCheckpoint(@JsonProperty("schemaVersion") int schemaVersion,
@@ -37,11 +64,18 @@ public final class SessionCheckpoint {
             @JsonProperty("workspacePath") String workspacePath,
             @JsonProperty("workspaceHashes") Map<String, String> workspaceHashes,
             @JsonProperty("originalContents") Map<String, String> originalContents,
-            @JsonProperty("createdFiles") Set<String> createdFiles) {
-        if (schemaVersion != 1 || sessionId == null || objective == null || objective.isBlank()
+            @JsonProperty("createdFiles") Set<String> createdFiles,
+            @JsonProperty("contextProjection") ContextProjection contextProjection,
+            @JsonProperty("contextSummary") ContextSummary contextSummary,
+            @JsonProperty("workspaceState") WorkspaceState workspaceState,
+            @JsonProperty("historicalEvidence") List<dev.backendagent.history.HistoricalEvidence> historicalEvidence) {
+        if ((schemaVersion != 1 && schemaVersion != 2) || sessionId == null || objective == null || objective.isBlank()
                 || status == null || modelCalls < 0 || lastEventSequence < 0 || workspacePath == null) {
             throw new IllegalArgumentException("Invalid checkpoint metadata");
         }
+        this.contextProjection = contextProjection;
+        this.contextSummary = contextSummary;
+        this.workspaceState = workspaceState;
         this.schemaVersion = schemaVersion;
         this.sessionId = sessionId;
         this.objective = objective;
@@ -50,6 +84,7 @@ public final class SessionCheckpoint {
         this.lastEventSequence = lastEventSequence;
         this.history = List.copyOf(history);
         this.workingMemory = List.copyOf(workingMemory);
+        this.historicalEvidence = historicalEvidence == null ? List.of() : List.copyOf(historicalEvidence);
         this.staleEvidenceIds = Set.copyOf(staleEvidenceIds);
         this.workspacePath = workspacePath;
         this.workspaceHashes = Map.copyOf(workspaceHashes);
@@ -57,6 +92,10 @@ public final class SessionCheckpoint {
         this.createdFiles = Set.copyOf(createdFiles);
     }
 
+    public List<dev.backendagent.history.HistoricalEvidence> getHistoricalEvidence() { return historicalEvidence; }
+    public ContextSummary getContextSummary() { return contextSummary; }
+    public WorkspaceState getWorkspaceState() { return workspaceState; }
+    public ContextProjection getContextProjection() { return contextProjection; }
     public int getSchemaVersion() { return schemaVersion; }
     public UUID getSessionId() { return sessionId; }
     public String getObjective() { return objective; }

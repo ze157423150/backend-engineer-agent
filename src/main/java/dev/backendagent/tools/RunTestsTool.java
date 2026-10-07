@@ -5,9 +5,9 @@ import dev.backendagent.model.ToolResult;
 import dev.backendagent.sandbox.DockerSandboxExecutor;
 
 public final class RunTestsTool implements Tool {
-    private final Workspace workspace;
+    private final WorkspaceAccess workspace;
     private final DockerSandboxExecutor executor;
-    public RunTestsTool(Workspace workspace, DockerSandboxExecutor executor) {
+    public RunTestsTool(WorkspaceAccess workspace, DockerSandboxExecutor executor) {
         this.workspace = workspace;
         this.executor = executor;
     }

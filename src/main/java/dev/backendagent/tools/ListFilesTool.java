@@ -4,9 +4,9 @@ import java.util.Map;
 import dev.backendagent.model.ToolResult;
 
 public final class ListFilesTool implements Tool {
-    private final Workspace workspace;
+    private final WorkspaceAccess workspace;
 
-    public ListFilesTool(Workspace workspace) { this.workspace = workspace; }
+    public ListFilesTool(WorkspaceAccess workspace) { this.workspace = workspace; }
     public String name() { return "list_files"; }
 
     public ToolDefinition definition() {

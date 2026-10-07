@@ -22,7 +22,7 @@ import dev.backendagent.runtime.AgentSession;
 /** Durable event log, inspection snapshot and resumable checkpoint, guarded by a session lock. */
 public final class FileSessionStore implements SessionEventSink, AutoCloseable {
     private final Path root;
-    private dev.backendagent.tools.Workspace workspace;
+    private dev.backendagent.tools.WorkspaceAccess workspace;
     private final Map<UUID, FileChannel> lockChannels = new HashMap<>();
     private final Map<UUID, java.nio.channels.FileLock> locks = new HashMap<>();
     private final ObjectMapper json = new ObjectMapper();
@@ -31,6 +31,77 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
 
     public FileSessionStore(Path root) { this.root = root.toAbsolutePath().normalize(); }
     public Path sessionDirectory(UUID id) { return root.resolve(id.toString()); }
+
+    /** Bound to this session; the model cannot choose a log path or another session ID. */
+    public dev.backendagent.history.ObservationArchive observationArchive(AgentSession session) {
+        return visitor -> visitObservations(session.id(), session.events().size(), visitor);
+    }
+
+    public synchronized void visitObservations(UUID id, long expectedSequence,
+            dev.backendagent.history.ObservationVisitor visitor) throws IOException {
+        safeDirectory(id);
+        Path file = sessionDirectory(id).resolve("events.jsonl");
+        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) { throw new IOException("Invalid observation archive"); }
+        final long maxBytes = 32L * 1024 * 1024;
+        var ids = new HashSet<String>();
+        try (var channel = FileChannel.open(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+            long size = channel.size();
+            if (size > maxBytes) { throw new IOException("Observation archive exceeds limit"); }
+            if (size > 0) {
+                channel.position(size - 1);
+                var tail = ByteBuffer.allocate(1);
+                if (channel.read(tail) != 1 || tail.array()[0] != '\n') { throw new IOException("Incomplete archive tail"); }
+                channel.position(0);
+            }
+            var bounded = new java.io.FilterInputStream(java.nio.channels.Channels.newInputStream(channel)) {
+                private long consumed;
+                private void count(int amount) throws IOException {
+                    if (amount > 0 && (consumed += amount) > maxBytes) { throw new IOException("Archive grew beyond limit"); }
+                }
+                @Override public int read() throws IOException { int value = in.read(); count(value < 0 ? 0 : 1); return value; }
+                @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+                    int amount = in.read(bytes, offset, length); count(amount); return amount;
+                }
+            };
+            try (var reader = new java.io.BufferedReader(new java.io.InputStreamReader(bounded,
+                    StandardCharsets.UTF_8.newDecoder()))) {
+                long sequence = 0;
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    var event = json.readTree(line);
+                    if (event == null || !event.isObject() || !event.path("sequence").isIntegralNumber()
+                            || !event.path("sequence").canConvertToLong()
+                            || event.path("sequence").asLong() != ++sequence) { throw new IOException("Invalid archive event order"); }
+                    String type = event.path("type").asText();
+                    AgentSession.EventType.valueOf(type);
+                    var payload = switch (type) {
+                        case "TOOL_EXECUTION_SUCCEEDED", "TOOL_EXECUTION_FAILED" -> event.path("payload");
+                        case "WORKING_MEMORY_LOADED" -> event.path("payload").path("verifiedExchange");
+                        default -> null;
+                    };
+                    if (payload == null) { continue; }
+                    if (!payload.isObject() || !payload.path("call").path("id").isTextual()
+                            || !payload.path("call").path("name").isTextual()
+                            || !payload.path("call").path("arguments").isObject()
+                            || !payload.path("result").path("content").isTextual()
+                            || !payload.path("result").path("successful").isBoolean()) {
+                        throw new IOException("Invalid archived observation");
+                    }
+                    for (var argument : payload.path("call").path("arguments")) {
+                        if (!argument.isTextual()) { throw new IOException("Invalid archived tool argument"); }
+                    }
+                    var exchange = json.treeToValue(payload, dev.backendagent.model.ToolExchange.class);
+                    if (exchange.archivedBody() != null || !ids.add(exchange.call().id())
+                            || (type.equals("TOOL_EXECUTION_SUCCEEDED") && !exchange.result().successful())
+                            || (type.equals("TOOL_EXECUTION_FAILED") && exchange.result().successful())) {
+                        throw new IOException("Duplicate or inconsistent archived observation");
+                    }
+                    visitor.accept(sequence, exchange);
+                }
+                if (sequence != expectedSequence) { throw new IOException("Archive watermark disagrees with session"); }
+            }
+        } catch (IllegalArgumentException invalid) { throw new IOException("Invalid archive record", invalid); }
+    }
 
     public synchronized void create(AgentSession session) {
         try {
@@ -48,7 +119,14 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
         }
     }
 
-    public void bindWorkspace(dev.backendagent.tools.Workspace workspace) {
+    public synchronized void exportWorkspace(UUID id, Path destination) throws IOException {
+        safeDirectory(id);
+        acquireLock(id);
+        try { dev.backendagent.sandbox.DockerWorkspace.export(sessionDirectory(id), destination); }
+        finally { releaseLock(id); }
+    }
+
+    public void bindWorkspace(dev.backendagent.tools.WorkspaceAccess workspace) {
         this.workspace = java.util.Objects.requireNonNull(workspace);
     }
 
@@ -64,10 +142,11 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
         Path temporary = null;
         try {
             safeDirectory(session.id());
-            var checkpoint = new SessionCheckpoint(1, session.id(), session.objective(), session.status(),
+            var checkpoint = new SessionCheckpoint(2, session.id(), session.objective(), session.status(),
                     session.modelCalls(), session.events().size(), session.history(), session.memoryFacts(),
                     session.staleEvidenceIds(), workspace.rootPath(), workspace.checkpointHashes(),
-                    workspace.originalContents(), workspace.createdFilePaths());
+                    workspace.originalContents(), workspace.createdFilePaths(), session.contextProjection(), session.contextSummary(),
+                    session.workspaceState(), session.historicalEvidence());
             Path target = sessionDirectory(session.id()).resolve("checkpoint.json");
             if (Files.isSymbolicLink(target)) { throw new IOException("Symlink checkpoint"); }
             temporary = Files.createTempFile(sessionDirectory(session.id()), ".checkpoint-", ".tmp");
@@ -89,7 +168,7 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
         }
     }
 
-    public synchronized AgentSession restore(UUID id, dev.backendagent.tools.Workspace workspace,
+    public synchronized AgentSession restore(UUID id, dev.backendagent.tools.WorkspaceAccess workspace,
                                               int maxModelCalls) throws IOException {
         safeDirectory(id);
         acquireLock(id);
@@ -119,7 +198,25 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
                 recordedEvents.add(new AgentSession.Event(event.path("sequence").asLong(),
                         AgentSession.EventType.valueOf(event.path("type").asText()), event.path("detail").asText()));
             }
-            var session = AgentSession.restore(checkpoint, recordedEvents, this);
+            var originals = new java.util.ArrayList<dev.backendagent.model.ToolExchange>();
+            if (checkpoint.getSchemaVersion() >= 2 || !checkpoint.getHistoricalEvidence().isEmpty() || checkpoint.getHistory().stream().anyMatch(entry -> entry.archivedBody() != null)) {
+                var sourceSequences = new java.util.HashMap<String, Long>();
+                visitObservations(id, checkpoint.getLastEventSequence(), (sequence, original) -> {
+                    var historical = original.result().historicalEvidence();
+                    if (historical != null && !java.util.Objects.equals(sourceSequences.get(historical.getSourceCallId()), historical.getSourceEventSequence())) {
+                        throw new IOException("Historical evidence source sequence differs from archive");
+                    }
+                    sourceSequences.put(original.call().id(), sequence);
+                    int index = originals.size();
+                    if (index >= checkpoint.getHistory().size()) { throw new IOException("Archive has additional observations"); }
+                    var entry = checkpoint.getHistory().get(index);
+                    if (entry.archivedBody() == null) {
+                        if (!entry.equals(original)) { throw new IOException("Checkpoint observation differs from archive"); }
+                    } else { entry.archivedBody().verify(sequence, original, entry); }
+                    originals.add(original);
+                });
+            } else { originals.addAll(checkpoint.getHistory()); }
+            var session = AgentSession.restore(checkpoint, recordedEvents, this, originals);
             workspace.restoreChanges(checkpoint.getOriginalContents(), checkpoint.getCreatedFiles());
             bindWorkspace(workspace);
             sequences.put(id, checkpoint.getLastEventSequence());
@@ -197,7 +294,12 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
             snapshot.put("answer", session.answer()).put("lastEventSequence", session.events().size());
             snapshot.put("savedAt", Instant.now().toString());
             snapshot.set("history", json.valueToTree(session.history()));
+            snapshot.set("contextProjection", json.valueToTree(session.contextProjection()));
+            snapshot.set("contextSummary", json.valueToTree(session.contextSummary()));
+            snapshot.set("workspaceState", json.valueToTree(session.workspaceState()));
+            snapshot.put("testStatus", session.workspaceState().testStatus().name());
             snapshot.set("workingMemory", json.valueToTree(session.memoryFacts()));
+            snapshot.set("historicalEvidence", json.valueToTree(session.historicalEvidence()));
             Path target = sessionDirectory(session.id()).resolve("session.json");
             if (Files.isSymbolicLink(target)) { throw new IOException("Symlink snapshot"); }
             temporary = Files.createTempFile(sessionDirectory(session.id()), ".snapshot-", ".tmp");

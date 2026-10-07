@@ -5,3 +5,8 @@ model.base-url=https://api.deepseek.com
 model.name=deepseek-flash
 model.connect-timeout-seconds=15
 model.request-timeout-seconds=90
+
+# Local application estimate budget; set within your model's supported capacity.
+model.context-window-tokens=65536
+model.max-output-tokens=2048
+model.safety-margin-tokens=1024

@@ -4,8 +4,8 @@ import java.util.Map;
 import dev.backendagent.model.ToolResult;
 
 public final class WorkspaceDiffTool implements Tool {
-    private final Workspace workspace;
-    public WorkspaceDiffTool(Workspace workspace) { this.workspace = workspace; }
+    private final WorkspaceAccess workspace;
+    public WorkspaceDiffTool(WorkspaceAccess workspace) { this.workspace = workspace; }
     public String name() { return "workspace_diff"; }
     public ToolDefinition definition() {
         return new ToolDefinition(name(), "查看本次创建的新文件或指定文件相对首次补丁前的差异。独立于 Git；+ 表示新增，- 表示删除，"

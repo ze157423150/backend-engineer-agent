@@ -10,11 +10,11 @@ import dev.backendagent.model.ToolExchange;
 import dev.backendagent.model.ToolResult;
 import dev.backendagent.persistence.FileSessionStore;
 import dev.backendagent.runtime.AgentSession;
-import dev.backendagent.tools.Workspace;
+import dev.backendagent.tools.WorkspaceAccess;
 
 /** Imports notes into a new task only after checking saved provenance and re-reading current evidence. */
 public final class MemoryLoader {
-    public MemoryLoadReport load(FileSessionStore store, UUID sourceId, Workspace workspace,
+    public MemoryLoadReport load(FileSessionStore store, UUID sourceId, WorkspaceAccess workspace,
                                  AgentSession destination) throws IOException {
         if (destination.status() != AgentSession.Status.CREATED) {
             throw new IllegalStateException("Memory must be loaded before the new task starts");
@@ -44,6 +44,16 @@ public final class MemoryLoader {
                         if (source != null) { throw new IllegalArgumentException("Duplicate source ID"); }
                         source = exchange;
                     }
+                }
+                if (source != null && !source.path("archivedBody").isMissingNode() && !source.path("archivedBody").isNull()) {
+                    var json = new com.fasterxml.jackson.databind.ObjectMapper();
+                    var inline = json.treeToValue(source, ToolExchange.class);
+                    dev.backendagent.history.ObservationArchive archive = visitor -> store.visitObservations(
+                            sourceId, saved.path("events").size(), visitor);
+                    var entry = new dev.backendagent.history.HistoryArchiveReader(archive, null).read(fact.getSourceCallId());
+                    if (entry == null) { throw new IOException("Saved memory archive source is missing"); }
+                    inline.archivedBody().verify(entry.getSequence(), entry.getExchange(), inline);
+                    source = json.valueToTree(entry.getExchange());
                 }
                 if (source == null || !source.path("result").path("successful").isBoolean()
                         || !source.path("result").path("successful").asBoolean()

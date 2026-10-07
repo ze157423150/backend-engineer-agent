@@ -124,12 +124,14 @@ class WorkingMemoryIntegrationTest {
     }
 
     @Test
-    void patchInvalidatesAllSearchEvidenceButKeepsUnrelatedFileNotes() {
+    void patchInvalidatesAllSearchEvidenceButKeepsUnrelatedFileNotes() throws IOException {
         var session = preparedSession("read_file", true);
         session.remember(new ToolExchange(new ToolCall("search-1", "search_code", Map.of("path", ".")),
                 new ToolResult(true, "Main.java:1: code"), null, 2));
+        Files.writeString(repository.resolve("Other.java"), "other code");
+        var workspace = new Workspace(repository, repository.resolve("agent-local.properties"));
         session.remember(new ToolExchange(new ToolCall("other-1", "read_file", Map.of("path", "Other.java")),
-                new ToolResult(true, "other code"), null, 3));
+                workspace.readFile("Other.java", "1", "10"), null, 3));
         session.saveFact("main note", "read-1", "code");
         session.saveFact("search note", "search-1", "code");
         session.saveFact("other note", "other-1", "other code");

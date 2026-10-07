@@ -20,9 +20,10 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.ByteBuffer;
 
 import dev.backendagent.model.ToolResult;
+import dev.backendagent.model.FileFingerprint;
 
 /** Bounded repository access. No model-generated shell commands. */
-public final class Workspace {
+public final class Workspace implements WorkspaceAccess {
     private static final int MAX_FILE_BYTES = 256 * 1024;
     private static final int MAX_OUTPUT_CHARS = 24_000;
     private static final int MAX_SEARCH_FILES = 1000;
@@ -168,7 +169,14 @@ public final class Workspace {
             if (!readableText(file)) {
                 return failure("只支持不超过 256 KiB 的普通文本文件");
             }
-            List<String> lines = Files.readAllLines(file);
+            byte[] bytes = boundedFileBytes(file);
+            // Both the excerpt and digest derive from this single captured byte array.
+            List<String> lines;
+            var decoder = StandardCharsets.UTF_8.newDecoder();
+            String text = decoder.decode(ByteBuffer.wrap(bytes)).toString();
+            try (var reader = new java.io.BufferedReader(new java.io.StringReader(text))) {
+                lines = reader.lines().toList();
+            }
             StringBuilder output = new StringBuilder("file=" + relative(file) + ", totalLines=" + lines.size() + "\n");
             for (int i = startLine - 1; i < Math.min(endLine, lines.size()); i++) {
                 String line = (i + 1) + ": " + lines.get(i) + "\n";
@@ -181,10 +189,33 @@ public final class Workspace {
             if (startLine > lines.size()) {
                 output.append("[起始行超出文件范围]\n");
             }
-            return new ToolResult(true, output.toString());
+            return new ToolResult(true, output.toString(), fingerprint(file, bytes));
         } catch (IOException | IllegalArgumentException failure) {
             return failure("文件不可读取，请检查工作区相对路径和行号；密钥文件、隐藏路径和符号链接禁止读取");
         }
+    }
+
+    public FileFingerprint fileFingerprint(String relativePath) throws IOException {
+        try {
+            Path file = resolve(relativePath);
+            if (!readableText(file)) { throw new IOException("File fingerprint unavailable"); }
+            return fingerprint(file, boundedFileBytes(file));
+        } catch (IllegalArgumentException invalidPath) { throw new IOException("File fingerprint unavailable", invalidPath); }
+    }
+
+    private byte[] boundedFileBytes(Path file) throws IOException {
+        try (var input = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS)) {
+            byte[] bytes = input.readNBytes(MAX_FILE_BYTES + 1);
+            if (bytes.length > MAX_FILE_BYTES) { throw new IOException("File exceeds read limit"); }
+            return bytes;
+        }
+    }
+
+    private FileFingerprint fingerprint(Path file, byte[] bytes) {
+        try {
+            return new FileFingerprint(relative(file), java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(bytes)));
+        } catch (java.security.NoSuchAlgorithmException unavailable) { throw new IllegalStateException(unavailable); }
     }
 
     public ToolResult searchCode(String relativePath, String query) {
@@ -384,7 +415,12 @@ public final class Workspace {
     }
 
     /** Protected configs, symlinks, hidden files and build output are excluded from the snapshot. */
-    public Path createTestSnapshot() throws IOException {
+    public Path createTestSnapshot() throws IOException { return createSnapshot(true); }
+
+    /** Trusted initialization/export copy; does not require a Maven project. */
+    public Path createWorkspaceSnapshot() throws IOException { return createSnapshot(false); }
+
+    private Path createSnapshot(boolean forTests) throws IOException {
         Path snapshot = Files.createTempDirectory("backend-agent-test-");
         try {
             Files.setPosixFilePermissions(snapshot, java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
@@ -413,11 +449,13 @@ public final class Workspace {
                     return FileVisitResult.CONTINUE;
                 }
             });
-            if (!Files.isRegularFile(snapshot.resolve("pom.xml"))) { throw new IOException("Missing root pom.xml"); }
+            if (forTests && !Files.isRegularFile(snapshot.resolve("pom.xml"))) { throw new IOException("Missing root pom.xml"); }
             // A nested tmpfs mount needs an existing mountpoint inside the read-only source mount.
-            Files.createDirectory(snapshot.resolve("target"));
-            Files.setPosixFilePermissions(snapshot.resolve("target"),
-                    java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+            if (forTests) {
+                Files.createDirectory(snapshot.resolve("target"));
+                Files.setPosixFilePermissions(snapshot.resolve("target"),
+                        java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+            }
             return snapshot;
         } catch (IOException | RuntimeException failure) {
             try (var paths = Files.walk(snapshot)) {

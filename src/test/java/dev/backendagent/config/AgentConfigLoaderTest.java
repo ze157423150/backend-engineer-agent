@@ -74,6 +74,30 @@ class AgentConfigLoaderTest {
         assertFalse(failure.getMessage().contains("test-key"));
     }
 
+    @Test
+    void loadsLocalRequestBudgetAndAllowsZeroMargin() throws IOException {
+        var file = write("model.api-key=test-key\nmodel.context-window-tokens=32000\n"
+                + "model.max-output-tokens=3000\nmodel.safety-margin-tokens=0\n");
+        var report = AgentConfigLoader.load(file, Map.of()).getRequestBudget().measure("x");
+        assertEquals(32000, report.getContextWindowTokens());
+        assertEquals(3000, report.getOutputTokens());
+        assertEquals(0, report.getSafetyMarginTokens());
+    }
+
+    @Test
+    void rejectsBudgetWithoutInputSpaceAndInvalidNumbersWithoutEchoingValues() throws IOException {
+        var file = write("model.api-key=test-key\nmodel.context-window-tokens=3000\n"
+                + "model.max-output-tokens=2000\nmodel.safety-margin-tokens=1000\n");
+        Path noInputSpace = file;
+        assertThrows(IllegalArgumentException.class, () -> AgentConfigLoader.load(noInputSpace, Map.of()));
+        file = write("model.api-key=test-key\nmodel.max-output-tokens=private-value\n");
+        Path invalid = file;
+        var error = assertThrows(IllegalArgumentException.class, () -> AgentConfigLoader.load(invalid, Map.of()));
+        assertFalse(error.getMessage().contains("private-value"));
+        assertFalse(error.getMessage().contains("test-key"));
+        assertTrue(error.getMessage().contains("model.max-output-tokens"));
+    }
+
     private Path write(String content) throws IOException {
         Path file = directory.resolve("local.properties");
         Files.writeString(file, content);

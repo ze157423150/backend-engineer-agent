@@ -4,9 +4,9 @@ import java.util.Map;
 import dev.backendagent.model.ToolResult;
 
 public final class SearchCodeTool implements Tool {
-    private final Workspace workspace;
+    private final WorkspaceAccess workspace;
 
-    public SearchCodeTool(Workspace workspace) { this.workspace = workspace; }
+    public SearchCodeTool(WorkspaceAccess workspace) { this.workspace = workspace; }
     public String name() { return "search_code"; }
 
     public ToolDefinition definition() {

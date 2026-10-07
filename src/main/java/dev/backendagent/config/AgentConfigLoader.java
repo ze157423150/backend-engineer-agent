@@ -56,7 +56,10 @@ public final class AgentConfigLoader {
         }
         return new ModelConfig(apiKey, baseUrl, required(properties, "model.name"),
                 seconds(properties, "model.connect-timeout-seconds"),
-                seconds(properties, "model.request-timeout-seconds"));
+                seconds(properties, "model.request-timeout-seconds"),
+                new dev.backendagent.model.RequestBudget(integer(properties, "model.context-window-tokens", false),
+                        integer(properties, "model.max-output-tokens", false),
+                        integer(properties, "model.safety-margin-tokens", true)));
     }
 
     private static void applyEnvironment(Properties properties, Map<String, String> environment,
@@ -73,6 +76,16 @@ public final class AgentConfigLoader {
             throw new IllegalArgumentException("Missing configuration: " + name);
         }
         return value.trim();
+    }
+
+    private static int integer(Properties properties, String name, boolean allowZero) {
+        try {
+            int value = Integer.parseInt(required(properties, name));
+            if (value < 0 || (!allowZero && value == 0)) { throw new NumberFormatException(); }
+            return value;
+        } catch (IllegalArgumentException failure) {
+            throw new IllegalArgumentException("Invalid integer configuration: " + name);
+        }
     }
 
     private static Duration seconds(Properties properties, String name) {

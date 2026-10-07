@@ -8,7 +8,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import dev.backendagent.model.ToolResult;
-import dev.backendagent.tools.Workspace;
+import dev.backendagent.tools.WorkspaceAccess;
 
 /** Fixed Maven test command in an offline, limited container using a filtered source snapshot. */
 public final class DockerSandboxExecutor {
@@ -29,7 +29,7 @@ public final class DockerSandboxExecutor {
         this.timeout = timeout;
     }
 
-    public ToolResult runTests(Workspace workspace) {
+    public ToolResult runTests(WorkspaceAccess workspace) {
         Path snapshot = null;
         String name = "backend-agent-test-" + UUID.randomUUID();
         ToolResult result;

@@ -95,4 +95,25 @@ class AgentOptionsTest {
         assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[] {
                 "--workspace", ".", "--task", "new", "--memory-from", "invalid"}));
     }
+    @Test
+    void exportOnlyAcceptsSessionNewOutputAndDataDirectory() {
+        String id = java.util.UUID.randomUUID().toString();
+        var options = AgentOptions.parse(new String[] {"--export-session", id, "--output-workspace", "review", "--data-dir", "sessions"});
+        assertEquals(java.util.UUID.fromString(id), options.getExportSession());
+        assertEquals(Path.of("review"), options.getOutputWorkspace());
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[] {"--export-session", id}));
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[] {"--output-workspace", "review"}));
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[] {
+                "--export-session", id, "--output-workspace", "review", "--task", "modify"}));
+    }
+
+    @Test
+    void configuresMinimumSummaryInputAndRejectsInvalidValues() {
+        assertEquals(2048, AgentOptions.parse(new String[]{"--workspace", ".", "--task", "inspect"}).getMinimumSummaryInputCharacters());
+        assertEquals(4096, AgentOptions.parse(new String[]{"--workspace", ".", "--task", "inspect", "--min-summary-input-chars", "4096"}).getMinimumSummaryInputCharacters());
+        for (String value : new String[]{"0", "-1", "invalid", "2147483648"}) {
+            assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{"--workspace", ".", "--task", "inspect", "--min-summary-input-chars", value}));
+        }
+    }
+
 }

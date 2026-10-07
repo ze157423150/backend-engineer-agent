@@ -5,10 +5,10 @@ import dev.backendagent.model.ToolResult;
 import dev.backendagent.runtime.AgentSession;
 
 public final class ApplyPatchTool implements Tool {
-    private final Workspace workspace;
+    private final WorkspaceAccess workspace;
     private final AgentSession session;
 
-    public ApplyPatchTool(Workspace workspace, AgentSession session) {
+    public ApplyPatchTool(WorkspaceAccess workspace, AgentSession session) {
         this.workspace = workspace;
         this.session = session;
     }
@@ -23,8 +23,8 @@ public final class ApplyPatchTool implements Tool {
 
     public ToolResult execute(Map<String, String> arguments) {
         if (session.status() != AgentSession.Status.WAITING_FOR_TOOL
-                || !session.hasCurrentRead(arguments.get("path"))) {
-            return new ToolResult(false, "补丁未应用：必须先成功读取该文件；每次修改后需要重新读取才能再次修改");
+                || !session.hasCurrentRead(arguments.get("path"), workspace)) {
+            return new ToolResult(false, "补丁未应用：必须先成功读取该文件，且读取哈希须与当前内容一致；每次修改后需要重新读取才能再次修改");
         }
         ToolResult result = workspace.applyPatch(arguments.get("path"), arguments.get("old_text"), arguments.get("new_text"));
         if (result.successful()) {

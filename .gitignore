@@ -46,3 +46,9 @@ redis-data/
 
 # Java
 *.class
+
+# Evaluation artifacts: keep the written record, exclude sessions, workspaces,
+# provider responses, copied projects, JUnit output and packaged binaries.
+/reports/*
+!/reports/README.md
+!/reports/第二层真实模型验证记录.txt
