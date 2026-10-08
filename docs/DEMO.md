@@ -36,13 +36,13 @@ cp agent-local.properties.example agent-local.properties
 在编辑器中填写 `model.api-key`。模型名称使用账号可用值；服务地址填根地址或 `/v1`，不要填完整 `/chat/completions`。共享预算默认输出2048 tokens；较大补丁出现 LENGTH 时，可以在本地配置中调为 `model.max-output-tokens=4096` 后恢复，完整输入预算检查仍会生效。
 
 ```bash
-java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar --help
+java -jar target/backend-engineer-agent-1.0.0.jar --help
 ```
 
 ## 终端连续对话（推荐日常使用）
 
 ```bash
-java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
+java -jar target/backend-engineer-agent-1.0.0.jar \
   --interactive --workspace examples/test-repair \
   --config agent-local.properties --data-dir .agent-sessions \
   --max-model-calls 60
@@ -80,7 +80,7 @@ Agent> ……测试结果……
 重新接入COMPLETED会话：
 
 ```bash
-java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
+java -jar target/backend-engineer-agent-1.0.0.jar \
   --interactive --workspace examples/test-repair \
   --continue-session "实际的Session-ID" \
   --config agent-local.properties --data-dir .agent-sessions \
@@ -98,7 +98,7 @@ java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
 [Calculator.java](../examples/test-repair/src/main/java/example/Calculator.java) 故意把 add 写成减法，[CalculatorTest.java](../examples/test-repair/src/test/java/example/CalculatorTest.java) 要求 `add(2, 3) == 5`。
 
 ```bash
-java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
+java -jar target/backend-engineer-agent-1.0.0.jar \
   --workspace examples/test-repair \
   --task "先调用run_tests定位CalculatorTest失败；修复Calculator.add的实现，不要修改现有测试或预期值。再调用run_tests验证，并用workspace_diff检查改动，最终解释修复和测试结果。" \
   --config agent-local.properties \
@@ -116,7 +116,7 @@ java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
 
 ```bash
 SESSION_ID='替换为会话UUID'
-java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
+java -jar target/backend-engineer-agent-1.0.0.jar \
   --workspace examples/test-repair \
   --continue-session "$SESSION_ID" \
   --message "继续在同一会话中，为Calculator.add补充负数和零值测试，保留现有测试不变；运行run_tests并说明实际测试结果。" \
@@ -132,7 +132,7 @@ java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
 ## 4. 查询和检查产物
 
 ```bash
-java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
+java -jar target/backend-engineer-agent-1.0.0.jar \
   --show-session "$SESSION_ID" --data-dir .agent-sessions
 ```
 
@@ -154,7 +154,7 @@ java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
 预算耗尽时继续原轮次，不追加用户消息：
 
 ```bash
-java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
+java -jar target/backend-engineer-agent-1.0.0.jar \
   --workspace examples/test-repair --resume-session "$SESSION_ID" \
   --config agent-local.properties --data-dir .agent-sessions \
   --max-model-calls 50
@@ -163,7 +163,7 @@ java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
 FAILED时使用独立入口：
 
 ```bash
-java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
+java -jar target/backend-engineer-agent-1.0.0.jar \
   --workspace examples/test-repair --resume-failed-session "$SESSION_ID" \
   --config agent-local.properties --data-dir .agent-sessions \
   --max-model-calls 50
@@ -176,7 +176,7 @@ java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
 ## 6. 导出到新目录
 
 ```bash
-java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
+java -jar target/backend-engineer-agent-1.0.0.jar \
   --export-session "$SESSION_ID" \
   --output-workspace /tmp/backend-agent-review-copy \
   --data-dir .agent-sessions
@@ -198,7 +198,7 @@ Agent 修改的是 `.agent-sessions/<UUID>/workspace`。本轮完成后在终端
 写回信息保存在会话目录的 `source-sync.json`，重新打开已完成会话后仍可继续使用：
 
 ```bash
-java -jar target/backend-engineer-agent-0.1.0-SNAPSHOT.jar \
+java -jar target/backend-engineer-agent-1.0.0.jar \
   --interactive --continue-session "$SESSION_ID" \
   --workspace examples/test-repair --config agent-local.properties \
   --max-model-calls 60
