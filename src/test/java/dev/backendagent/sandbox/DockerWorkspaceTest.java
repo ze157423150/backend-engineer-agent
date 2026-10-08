@@ -63,6 +63,31 @@ class DockerWorkspaceTest {
     }
 
     @Test
+    void dockerPermissionFailureIsIdentifiedInsteadOfHiddenByCleanupError() throws Exception {
+        var source = source();
+        CommandRunner runner = (command, timeout) -> new CommandResult(1, false,
+                "permission denied while trying to connect to the docker API; server echoed sensitive-text");
+        var failure = assertThrows(PersistenceException.class, () -> DockerWorkspace.create(
+                new Workspace(source, source.resolve("agent-local.properties")), sessionDirectory(), runner,
+                DockerSandboxExecutor.DEFAULT_IMAGE));
+        assertTrue(failure.getMessage().contains("permission denied"));
+        assertTrue(failure.getMessage().contains("newgrp docker"));
+        assertFalse(failure.getMessage().contains("sensitive-text"));
+    }
+
+    @Test
+    void unreachableDaemonHasASafeActionableCleanupDiagnostic() throws Exception {
+        var source = source();
+        CommandRunner runner = (command, timeout) -> new CommandResult(1, false,
+                "Cannot connect to the Docker daemon; echoed sensitive-text");
+        var failure = assertThrows(PersistenceException.class, () -> DockerWorkspace.create(
+                new Workspace(source, source.resolve("agent-local.properties")), sessionDirectory(), runner,
+                DockerSandboxExecutor.DEFAULT_IMAGE));
+        assertTrue(failure.getMessage().contains("Start Docker"));
+        assertFalse(failure.getMessage().contains("sensitive-text"));
+    }
+
+    @Test
     void fileOperationsUseOnlyFilteredCopyAndMutationsNeverChangeSource() throws Exception {
         Path source = source();
         Path session = sessionDirectory();

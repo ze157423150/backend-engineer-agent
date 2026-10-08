@@ -13,8 +13,12 @@ import dev.backendagent.runtime.ContextProjection;
 import dev.backendagent.runtime.ContextSummary;
 import dev.backendagent.runtime.WorkspaceState;
 
-/** A complete tool-batch boundary; this first version resumes only budget stops. */
+/** Complete execution boundary: budget stops resume; finished turns accept a new user message. */
 public final class SessionCheckpoint {
+    private final dev.backendagent.runtime.SessionFailure failure;
+    private final dev.backendagent.runtime.PendingToolBatch pendingToolBatch;
+    private final List<dev.backendagent.runtime.ConversationTurn> turns;
+    private final dev.backendagent.runtime.ConversationSummary conversationSummary;
     private final ContextProjection contextProjection;
     private final ContextSummary contextSummary;
     private final WorkspaceState workspaceState;
@@ -53,6 +57,56 @@ public final class SessionCheckpoint {
                 contextProjection, contextSummary, workspaceState, List.of());
     }
 
+    public SessionCheckpoint(int schemaVersion, UUID sessionId, String objective, AgentSession.Status status,
+            int modelCalls, long lastEventSequence, List<ToolExchange> history, List<MemoryFact> workingMemory,
+            Set<String> staleEvidenceIds, String workspacePath, Map<String,String> workspaceHashes,
+            Map<String,String> originalContents, Set<String> createdFiles, ContextProjection contextProjection,
+            ContextSummary contextSummary, WorkspaceState workspaceState,
+            List<dev.backendagent.history.HistoricalEvidence> historicalEvidence) {
+        this(schemaVersion, sessionId, objective, status, modelCalls, lastEventSequence, history, workingMemory,
+                staleEvidenceIds, workspacePath, workspaceHashes, originalContents, createdFiles, contextProjection,
+                contextSummary, workspaceState, historicalEvidence, List.of());
+    }
+
+    public SessionCheckpoint(int schemaVersion, UUID sessionId, String objective, AgentSession.Status status,
+            int modelCalls, long lastEventSequence, List<ToolExchange> history, List<MemoryFact> workingMemory,
+            Set<String> staleEvidenceIds, String workspacePath, Map<String,String> workspaceHashes,
+            Map<String,String> originalContents, Set<String> createdFiles, ContextProjection contextProjection,
+            ContextSummary contextSummary, WorkspaceState workspaceState,
+            List<dev.backendagent.history.HistoricalEvidence> historicalEvidence,
+            List<dev.backendagent.runtime.ConversationTurn> turns) {
+        this(schemaVersion,sessionId,objective,status,modelCalls,lastEventSequence,history,workingMemory,staleEvidenceIds,
+                workspacePath,workspaceHashes,originalContents,createdFiles,contextProjection,contextSummary,workspaceState,
+                historicalEvidence,turns,null);
+    }
+
+    public SessionCheckpoint(int schemaVersion, UUID sessionId, String objective, AgentSession.Status status,
+            int modelCalls, long lastEventSequence, List<ToolExchange> history, List<MemoryFact> workingMemory,
+            Set<String> staleEvidenceIds, String workspacePath, Map<String,String> workspaceHashes,
+            Map<String,String> originalContents, Set<String> createdFiles, ContextProjection contextProjection,
+            ContextSummary contextSummary, WorkspaceState workspaceState,
+            List<dev.backendagent.history.HistoricalEvidence> historicalEvidence,
+            List<dev.backendagent.runtime.ConversationTurn> turns,
+            dev.backendagent.runtime.ConversationSummary conversationSummary) {
+        this(schemaVersion,sessionId,objective,status,modelCalls,lastEventSequence,history,workingMemory,
+                staleEvidenceIds,workspacePath,workspaceHashes,originalContents,createdFiles,contextProjection,
+                contextSummary,workspaceState,historicalEvidence,turns,conversationSummary,null);
+    }
+
+    public SessionCheckpoint(int schemaVersion, UUID sessionId, String objective, AgentSession.Status status,
+            int modelCalls, long lastEventSequence, List<ToolExchange> history, List<MemoryFact> workingMemory,
+            Set<String> staleEvidenceIds, String workspacePath, Map<String,String> workspaceHashes,
+            Map<String,String> originalContents, Set<String> createdFiles, ContextProjection contextProjection,
+            ContextSummary contextSummary, WorkspaceState workspaceState,
+            List<dev.backendagent.history.HistoricalEvidence> historicalEvidence,
+            List<dev.backendagent.runtime.ConversationTurn> turns,
+            dev.backendagent.runtime.ConversationSummary conversationSummary,
+            dev.backendagent.runtime.SessionFailure failure) {
+        this(schemaVersion,sessionId,objective,status,modelCalls,lastEventSequence,history,workingMemory,
+                staleEvidenceIds,workspacePath,workspaceHashes,originalContents,createdFiles,contextProjection,
+                contextSummary,workspaceState,historicalEvidence,turns,conversationSummary,failure,null);
+    }
+
     @JsonCreator
     public SessionCheckpoint(@JsonProperty("schemaVersion") int schemaVersion,
             @JsonProperty("sessionId") UUID sessionId, @JsonProperty("objective") String objective,
@@ -68,11 +122,19 @@ public final class SessionCheckpoint {
             @JsonProperty("contextProjection") ContextProjection contextProjection,
             @JsonProperty("contextSummary") ContextSummary contextSummary,
             @JsonProperty("workspaceState") WorkspaceState workspaceState,
-            @JsonProperty("historicalEvidence") List<dev.backendagent.history.HistoricalEvidence> historicalEvidence) {
-        if ((schemaVersion != 1 && schemaVersion != 2) || sessionId == null || objective == null || objective.isBlank()
+            @JsonProperty("historicalEvidence") List<dev.backendagent.history.HistoricalEvidence> historicalEvidence,
+            @JsonProperty("turns") List<dev.backendagent.runtime.ConversationTurn> turns,
+            @JsonProperty("conversationSummary") dev.backendagent.runtime.ConversationSummary conversationSummary,
+            @JsonProperty("failure") dev.backendagent.runtime.SessionFailure failure,
+            @JsonProperty("pendingToolBatch") dev.backendagent.runtime.PendingToolBatch pendingToolBatch) {
+        if ((schemaVersion != 1 && schemaVersion != 2 && schemaVersion != 3) || sessionId == null || objective == null || objective.isBlank()
                 || status == null || modelCalls < 0 || lastEventSequence < 0 || workspacePath == null) {
             throw new IllegalArgumentException("Invalid checkpoint metadata");
         }
+        this.conversationSummary=conversationSummary;
+        this.failure=failure;
+        this.pendingToolBatch=pendingToolBatch;
+        this.turns = turns == null ? List.of() : List.copyOf(turns);
         this.contextProjection = contextProjection;
         this.contextSummary = contextSummary;
         this.workspaceState = workspaceState;
@@ -92,6 +154,10 @@ public final class SessionCheckpoint {
         this.createdFiles = Set.copyOf(createdFiles);
     }
 
+    public dev.backendagent.runtime.SessionFailure getFailure() { return failure; }
+    public dev.backendagent.runtime.PendingToolBatch getPendingToolBatch() { return pendingToolBatch; }
+    public dev.backendagent.runtime.ConversationSummary getConversationSummary() { return conversationSummary; }
+    public List<dev.backendagent.runtime.ConversationTurn> getTurns() { return turns; }
     public List<dev.backendagent.history.HistoricalEvidence> getHistoricalEvidence() { return historicalEvidence; }
     public ContextSummary getContextSummary() { return contextSummary; }
     public WorkspaceState getWorkspaceState() { return workspaceState; }

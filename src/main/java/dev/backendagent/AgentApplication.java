@@ -1,6 +1,10 @@
 package dev.backendagent;
 
 import java.io.IOException;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -62,21 +66,34 @@ public final class AgentApplication {
             return;
         }
         try {
+            var terminalInput = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
+            var terminalOutput = new PrintWriter(System.out, true, StandardCharsets.UTF_8);
+            if (options.isInteractive()) {
+                new dev.backendagent.cli.InteractiveSessions(options, terminalInput, terminalOutput).run();
+                return;
+            }
+            String firstTask = options.getTask();
             Path protectedConfig = options.getConfigFile() == null
                     ? Path.of("agent-local.properties") : options.getConfigFile();
             var config = AgentConfigLoader.load(options.getConfigFile());
             var model = new DeepSeekModelClient(config);
             var runner = new LocalProcessRunner();
             boolean resuming = options.getResumeSession() != null;
+            boolean continuing = options.getContinueSession() != null;
+            boolean recoveringFailure = options.getResumeFailedSession() != null;
             dev.backendagent.sandbox.DockerWorkspace workspace;
             AgentSession session;
-            if (resuming) {
+            if (resuming || continuing || recoveringFailure) {
+                var savedId = recoveringFailure ? options.getResumeFailedSession()
+                        : continuing ? options.getContinueSession() : options.getResumeSession();
                 workspace = dev.backendagent.sandbox.DockerWorkspace.open(options.getWorkspace(),
-                        store.sessionDirectory(options.getResumeSession()), runner, options.getSandboxImage());
-                session = store.restore(options.getResumeSession(), workspace, options.getMaxModelCalls());
+                        store.sessionDirectory(savedId), runner, options.getSandboxImage());
+                session = recoveringFailure ? store.restoreFailed(savedId, workspace, options.getMaxModelCalls(), options.isRetryIncompleteTool())
+                        : continuing ? store.openCompleted(savedId, workspace, options.getMaxModelCalls())
+                        : store.restore(savedId, workspace, options.getMaxModelCalls());
             } else {
                 var source = new Workspace(options.getWorkspace(), protectedConfig, options.getDataDirectory());
-                session = new AgentSession(options.getTask(), store);
+                session = new AgentSession(firstTask, store);
                 store.create(session);
                 workspace = dev.backendagent.sandbox.DockerWorkspace.create(source, store.sessionDirectory(session.id()),
                         runner, options.getSandboxImage());
@@ -88,23 +105,27 @@ public final class AgentApplication {
             var tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace),
                     new dev.backendagent.tools.ReadObservationTool(session, workspace, archive),
                     new dev.backendagent.tools.SearchHistoryTool(new dev.backendagent.history.HistoryArchiveReader(archive, workspace)),
-                    new SearchCodeTool(workspace), new RememberFactTool(session),
+                    new SearchCodeTool(workspace), new dev.backendagent.tools.SearchTurnsTool(session),
+                    new dev.backendagent.tools.ReadTurnTool(session), new RememberFactTool(session),
                     new ApplyPatchTool(workspace, session), new CreateFileTool(workspace, session),
                     new WorkspaceDiffTool(workspace), new RunTestsTool(workspace, sandbox));
-            var runtime = new AgentRuntime(model, tools, options.getMaxModelCalls(),
+            java.util.function.IntFunction<AgentRuntime> runtimeFactory = limit -> new AgentRuntime(model, tools, limit,
                     new ContextBudget(options.getMaxHistoryCharacters()), options.getMinimumSummaryInputCharacters(), System.out::println);
 
             System.out.println("Session ID: " + session.id());
             System.out.println("Session files: " + store.sessionDirectory(session.id()));
             System.out.println("Isolated workspace: " + workspace.rootPath());
-            System.out.println("File tools run in Docker; source repository is unchanged. Export the result explicitly when ready.");
+            System.out.println("File tools run in Docker against an isolated copy. Use /diff and /apply in interactive mode to write changes back, or export to a new directory.");
             if (options.getMemoryFrom() != null) {
                 var report = new MemoryLoader().load(store, options.getMemoryFrom(), workspace, session);
                 store.saveSnapshot(session);
                 System.out.println("Memory loaded: " + report.getLoaded() + ", skipped: " + report.getSkipped());
             }
             System.out.println("Agent started. Compaction progress is shown live; full execution trace follows when the task ends.");
-            if (resuming) { runtime.resume(session); } else { runtime.run(session); }
+            var runtime = runtimeFactory.apply(options.getMaxModelCalls());
+            if (recoveringFailure) { runtime.resumeFailed(session, options.isRetryIncompleteTool()); }
+            else if (continuing) { runtime.continueConversation(session, options.getMessage()); }
+            else if (resuming) { runtime.resume(session); } else { runtime.run(session); }
             store.saveSnapshot(session);
             printResult(session);
             if (session.status() != AgentSession.Status.COMPLETED) {
@@ -130,6 +151,7 @@ public final class AgentApplication {
                 System.out.printf("%02d %-26s %s%n", event.sequence(), event.type(), event.detail()));
         System.out.println("Status: " + session.status());
         System.out.println("Model calls: " + session.modelCalls());
+        System.out.println("User turn: " + session.turns().getLast().getTurnId());
         System.out.println("Workspace revision: " + session.workspaceState().getRevision());
         System.out.println("Test status: " + session.workspaceState().testStatus());
         var latestTest = session.workspaceState().getLatestTest();

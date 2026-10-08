@@ -76,17 +76,40 @@ public final class AgentRuntime {
         executeLoop(session);
     }
 
+    public void resumeFailed(AgentSession session, boolean retryInFlight) {
+        if (session.status() != FAILED || maxModelCalls <= session.modelCalls()) {
+            throw new IllegalArgumentException("Failed resume requires a failed session and additional model-call budget");
+        }
+        session.resume(retryInFlight);
+        executeLoop(session);
+    }
+
+    public void continueConversation(AgentSession session, String message) {
+        if (session.modelCalls() >= maxModelCalls) throw new IllegalArgumentException("New turn requires additional model-call budget");
+        session.continueWith(message);
+        executeLoop(session);
+    }
+
     private void executeLoop(AgentSession session) {
         Set<String> seenCallIds = new HashSet<>();
         session.history().forEach(exchange -> seenCallIds.add(exchange.call().id()));
+        boolean completeToolBatch = true;
         try {
             while (session.status() == RUNNING) {
+                if (session.pendingToolBatch() != null) {
+                    completeToolBatch = false;
+                    session.pendingToolBatch().getCalls().forEach(call -> seenCallIds.add(call.id()));
+                    executePendingBatch(session);
+                    completeToolBatch = true;
+                    continue;
+                }
                 if (session.modelCalls() >= maxModelCalls) {
                     session.transitionTo(AgentSession.Status.BUDGET_EXHAUSTED);
                     session.append(AgentSession.EventType.BUDGET_EXHAUSTED, "Model call limit reached");
                     session.checkpoint();
                     return;
                 }
+                compactConversationIfNeeded(session);
                 var prepared = prepareContext(session);
                 int callsBeforeCompaction = session.modelCalls();
                 compactIfNeeded(session, prepared.historyBudget());
@@ -106,15 +129,14 @@ public final class AgentRuntime {
                         + ", compressedExchanges=" + context.contextProjection().getCompressedExchanges()
                         + ", filteredExchanges=" + context.contextProjection().getFilteredExchanges(),
                         context.contextProjection());
-                session.countModelCall();
-                session.append(MODEL_CALL_STARTED, "call=" + session.modelCalls());
-                ModelResponse response = Objects.requireNonNull(model.execute(context));
+                ModelResponse response = executeModelWithRetry(session, context);
                 session.append(MODEL_RESPONSE_RECEIVED, response.toString(), response);
 
                 if (response.getType() == ModelResponse.Type.FINISH) {
                     session.finish(response.getAnswer());
                     session.transitionTo(COMPLETED);
                     session.append(SESSION_COMPLETED, response.getAnswer());
+                    session.checkpoint();
                     return;
                 }
 
@@ -125,40 +147,85 @@ public final class AgentRuntime {
                     }
                 }
                 seenCallIds.addAll(batchIds);
-                session.transitionTo(WAITING_FOR_TOOL);
-                for (ToolCall call : response.getToolCalls()) {
-                    session.append(TOOL_CALL_REQUESTED, call.toString(), call);
-                    ToolResult result = executeTool(call);
-                    if (call.name().equals("run_tests")) {
-                        result = new ToolResult(result.successful(), "workspaceRevision="
-                                + session.workspaceState().getRevision() + "\n" + result.content());
-                    }
-                    session.remember(new ToolExchange(call, result, response.getAssistantContent(),
-                            session.modelCalls()));
-                    session.append(result.successful() ? TOOL_EXECUTION_SUCCEEDED : TOOL_EXECUTION_FAILED,
-                            "callId=" + call.id() + ", content=" + result.content(), session.history().getLast());
-                    var completed = session.history().getLast();
-                    session.retainHistoricalEvidence(completed);
-                    if (WorkspaceState.isSuccessfulWrite(completed)) {
-                        session.append(WORKSPACE_REVISION_ADVANCED, "callId=" + call.id()
-                                + ", revision=" + session.workspaceState().getRevision()
-                                + ", testStatus=" + session.workspaceState().testStatus(), session.workspaceState());
-                    } else if (call.name().equals("run_tests")) {
-                        session.append(TEST_RESULT_RECORDED, "callId=" + call.id()
-                                + ", revision=" + session.workspaceState().getRevision()
-                                + ", testStatus=" + session.workspaceState().testStatus(), session.workspaceState());
-                    }
-                }
-                session.transitionTo(RUNNING);
-                session.releaseOldBodies();
+                completeToolBatch = false;
+                session.setPendingToolBatch(new PendingToolBatch(session.modelCalls(),
+                        response.getAssistantContent(), response.getToolCalls(), 0, false));
+                session.append(TOOL_BATCH_STARTED, "call=" + session.modelCalls(), session.pendingToolBatch());
                 session.checkpoint();
             }
         } catch (PersistenceException failure) {
             throw failure;
         } catch (RuntimeException failure) {
-            session.transitionTo(FAILED);
-            session.append(SESSION_FAILED, failure.getClass().getSimpleName() + ": " + failure.getMessage());
+            session.fail(failure, completeToolBatch);
         }
+    }
+
+    /** Retries one unchanged task request; no compaction or tool execution occurs between attempts. */
+    private ModelResponse executeModelWithRetry(AgentSession session, dev.backendagent.model.ModelRequest context) {
+        for (int attempt = 1; ; attempt++) {
+            session.countModelCall();
+            session.append(MODEL_CALL_STARTED, "call=" + session.modelCalls());
+            try { return Objects.requireNonNull(model.execute(context)); }
+            catch (dev.backendagent.model.ModelCallFailure failure) {
+                var diagnostic = failure.getDiagnostic();
+                session.append(MODEL_CALL_FAILED, diagnostic.detail() + ", attempt=" + attempt, diagnostic);
+                if (!diagnostic.isRetryable() || attempt >= 3 || session.modelCalls() >= maxModelCalls) throw failure;
+                long delayMillis = 250L * attempt;
+                session.append(MODEL_RETRY_SCHEDULED, "nextAttempt=" + (attempt + 1) + ", delayMillis=" + delayMillis);
+                progress.accept("模型请求失败（" + diagnostic.getCode() + "），准备第" + (attempt + 1) + "次尝试");
+                session.checkpoint();
+                try { Thread.sleep(delayMillis); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new dev.backendagent.model.ModelCallFailure("Model retry interrupted",
+                            new dev.backendagent.model.ModelFailureDiagnostic(
+                                dev.backendagent.model.ModelFailureDiagnostic.Code.INTERRUPTED,
+                                dev.backendagent.model.ModelFailureDiagnostic.FinishReason.MISSING, null, false));
+                }
+            }
+        }
+    }
+
+    private void executePendingBatch(AgentSession session) {
+        session.transitionTo(WAITING_FOR_TOOL);
+        while (session.pendingToolBatch().getNextCallIndex() < session.pendingToolBatch().getCalls().size()) {
+            var batch = session.pendingToolBatch();
+            if (batch.isInFlight()) throw new IllegalStateException("In-flight tool has not been authorized for retry");
+            ToolCall call = batch.getCalls().get(batch.getNextCallIndex());
+            session.append(TOOL_CALL_REQUESTED, call.toString(), call);
+            session.setPendingToolBatch(batch.starting());
+            // Save the pre-execution workspace hash; ambiguous changes cannot be silently replayed.
+            session.checkpoint();
+            session.append(TOOL_EXECUTION_STARTED, "callId=" + call.id(), session.pendingToolBatch());
+            ToolResult result = executeTool(call);
+            if (call.name().equals("run_tests")) {
+                result = new ToolResult(result.successful(), "workspaceRevision="
+                        + session.workspaceState().getRevision() + "\n" + result.content());
+            }
+            session.remember(new ToolExchange(call, result, batch.getAssistantContent(), batch.getModelCallNumber()));
+            session.append(result.successful() ? TOOL_EXECUTION_SUCCEEDED : TOOL_EXECUTION_FAILED,
+                    "callId=" + call.id() + ", content=" + result.content(), session.history().getLast());
+            var completed = session.history().getLast();
+            session.retainHistoricalEvidence(completed);
+            if (WorkspaceState.isSuccessfulWrite(completed)) {
+                session.append(WORKSPACE_REVISION_ADVANCED, "callId=" + call.id()
+                        + ", revision=" + session.workspaceState().getRevision()
+                        + ", testStatus=" + session.workspaceState().testStatus(), session.workspaceState());
+            } else if (call.name().equals("run_tests")) {
+                session.append(TEST_RESULT_RECORDED, "callId=" + call.id()
+                        + ", revision=" + session.workspaceState().getRevision()
+                        + ", testStatus=" + session.workspaceState().testStatus(), session.workspaceState());
+            }
+            session.setPendingToolBatch(batch.completedOne());
+            session.append(TOOL_BATCH_PROGRESS, "nextCallIndex=" + session.pendingToolBatch().getNextCallIndex(),
+                    session.pendingToolBatch());
+            session.checkpoint();
+        }
+        session.setPendingToolBatch(null);
+        session.transitionTo(RUNNING);
+        session.append(TOOL_BATCH_COMPLETED, "call=" + session.modelCalls());
+        session.releaseOldBodies();
+        session.checkpoint();
     }
 
     private static final class PreparedContext {
@@ -226,6 +293,35 @@ public final class AgentRuntime {
         }
         if (install) { session.installProjection(best.request().contextProjection()); }
         return best;
+    }
+
+    private void compactConversationIfNeeded(AgentSession session) {
+        if(!model.supportsConversationSummarization() || maxModelCalls-session.modelCalls()<2) return;
+        var compactor=new ConversationCompactor(minimumSummaryInputCharacters);
+        var request=compactor.plan(session);if(request==null)return;
+        session.append(CONVERSATION_SUMMARY_ATTEMPTED,Integer.toString(request.toIndex()));
+        session.transitionTo(COMPACTING);session.countModelCall();
+        session.append(CONVERSATION_COMPACTION_STARTED,"call="+session.modelCalls()+", fromTurnIndex="+request.fromIndex()+", toTurnIndex="+request.toIndex());
+        progress.accept("正在压缩旧轮次对话，请稍候……");
+        var stage=SummaryRejection.Stage.MODEL_SUMMARY;
+        ConversationSummary candidate;
+        try {
+            var notes=model.summarizeConversation(request);stage=SummaryRejection.Stage.SUMMARY_VALIDATION;
+            candidate=compactor.validate(request,notes,session);stage=SummaryRejection.Stage.REQUEST_BUDGET;
+            var preview=new ContextAssembler(configuredHistoryBudget).preview(session,tools.values().stream().map(Tool::definition).toList(),
+                    maxModelCalls-session.modelCalls(),session.contextSummary(),candidate);
+            var report=model.inspectRequest(preview);
+            if(report!=null && !report.isWithinBudget()) throw new IllegalStateException("Conversation summary request budget failed");
+        } catch(PersistenceException failure){throw failure;}
+        catch(RuntimeException failure){
+            session.transitionTo(RUNNING);
+            var rejection=SummaryRejection.from(stage,failure,session.modelCalls(),request.fromIndex(),request.toIndex());
+            session.append(CONVERSATION_COMPACTION_FAILED,rejection.detail(),rejection);
+            progress.accept("跨轮摘要未通过，保留旧摘要和可见原文。");return;
+        }
+        session.installConversationSummary(candidate);session.transitionTo(RUNNING);
+        session.append(CONVERSATION_COMPACTION_COMPLETED,"revision="+candidate.getRevision()+", coveredTurns="+candidate.getCoveredTurns(),candidate);
+        session.checkpoint();progress.accept("跨轮摘要完成，继续当前要求。");
     }
 
     private void compactIfNeeded(AgentSession session, ContextBudget effectiveHistoryBudget) {

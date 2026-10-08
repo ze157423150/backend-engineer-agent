@@ -37,7 +37,7 @@ class HistoryUnloadingTest {
             var turns = new AtomicInteger();
             new AgentRuntime(request -> {
                 int turn = turns.getAndIncrement();
-                if (turn < 5) { return ModelResponse.callTool(read("read-" + turn)); }
+                if (turn < 13) { return ModelResponse.callTool(read("read-" + turn)); }
                 var old = session.history().getFirst();
                 assertNotNull(old.archivedBody());
                 assertFalse(old.result().content().contains(QUOTE));
@@ -46,13 +46,13 @@ class HistoryUnloadingTest {
                         List.of(new SummaryNote(SummaryNote.Kind.PROGRESS, "middle observed", "read-0", QUOTE))));
                 return ModelResponse.callTool(new ToolCall("memory", "remember_fact", Map.of(
                         "statement", "middle observed", "source_call_id", "read-0", "evidence_quote", QUOTE)));
-            }, List.of(new ReadFileTool(workspace), new RememberFactTool(session)), 6).run(session);
+            }, List.of(new ReadFileTool(workspace), new RememberFactTool(session)), 14).run(session);
             assertEquals(AgentSession.Status.BUDGET_EXHAUSTED, session.status());
             assertEquals(1, session.memoryFacts().size());
             assertFalse(session.history().getFirst().result().content().contains(QUOTE));
             assertTrue(session.events().stream().allMatch(event -> event.detail().length() <= 1200));
             assertTrue(Files.readString(store.sessionDirectory(session.id()).resolve("events.jsonl")).contains(QUOTE));
-            assertTrue(session.history().get(2).result().content().contains(QUOTE)); // Last four complete batches stay inline.
+            assertTrue(session.history().get(3).result().content().contains(QUOTE)); // Last twelve complete batches stay inline.
             store.saveSnapshot(session);
             id = session.id();
             String checkpoint = Files.readString(store.sessionDirectory(id).resolve("checkpoint.json"));
@@ -60,16 +60,16 @@ class HistoryUnloadingTest {
         }
         try (var store = new FileSessionStore(data())) {
             var workspace = workspace();
-            var restored = store.restore(id, workspace, 8);
+            var restored = store.restore(id, workspace, 16);
             assertNotNull(restored.history().getFirst().archivedBody());
             assertFalse(restored.history().getFirst().result().content().contains(QUOTE));
             assertEquals(QUOTE, restored.memoryFacts().getFirst().getEvidenceQuote());
             assertEquals(QUOTE, restored.contextSummary().getNotes().getFirst().getEvidenceQuote());
             var retrieve = new ReadObservationTool(restored, workspace, store.observationArchive(restored));
-            new AgentRuntime(request -> restored.modelCalls() == 7
+            new AgentRuntime(request -> restored.modelCalls() == 15
                     ? ModelResponse.callTool(new ToolCall("retrieve", "read_observation", Map.of(
                         "call_id", "read-0", "start_line", "2", "end_line", "2")))
-                    : ModelResponse.finish("continued"), List.of(retrieve), 8).resume(restored);
+                    : ModelResponse.finish("continued"), List.of(retrieve), 16).resume(restored);
             assertEquals(AgentSession.Status.COMPLETED, restored.status());
             assertTrue(restored.history().getLast().result().content().contains(QUOTE));
             assertFalse(restored.history().getFirst().result().content().contains(QUOTE)); // Retrieval does not rehydrate history.
@@ -92,10 +92,10 @@ class HistoryUnloadingTest {
             new AgentRuntime(request -> {
                 int turn = turns.getAndIncrement();
                 return ModelResponse.callTools(List.of(read("a-" + turn), read("b-" + turn)), "reading");
-            }, List.of(new ReadFileTool(workspace())), 5).run(session);
-            assertEquals(10, session.history().size());
+            }, List.of(new ReadFileTool(workspace())), 13).run(session);
+            assertEquals(26, session.history().size());
             assertTrue(session.history().subList(0, 2).stream().allMatch(exchange -> exchange.archivedBody() != null));
-            assertTrue(session.history().subList(2, 10).stream().allMatch(exchange -> exchange.archivedBody() == null));
+            assertTrue(session.history().subList(2, 26).stream().allMatch(exchange -> exchange.archivedBody() == null));
         }
         var volatileSession = new AgentSession("no disk");
         var turns = new AtomicInteger();
@@ -112,7 +112,7 @@ class HistoryUnloadingTest {
             store.create(session);
             var turns = new AtomicInteger();
             new AgentRuntime(request -> ModelResponse.callTool(read("read-" + turns.getAndIncrement())),
-                    List.of(new ReadFileTool(workspace())), 5).run(session);
+                    List.of(new ReadFileTool(workspace())), 13).run(session);
             store.saveSnapshot(session);
             return session.id();
         }
@@ -132,7 +132,7 @@ class HistoryUnloadingTest {
             else { ((ObjectNode) entry.path("archivedBody")).put(field, "0".repeat(64)); }
             Files.writeString(checkpoint, json.writeValueAsString(forged));
             try (var store = new FileSessionStore(data())) {
-                assertThrows(java.io.IOException.class, () -> store.restore(id, workspace(), 6));
+                assertThrows(java.io.IOException.class, () -> store.restore(id, workspace(), 14));
             }
         }
     }
@@ -153,14 +153,14 @@ class HistoryUnloadingTest {
             new AgentRuntime(request -> {
                 int turn = turns.getAndIncrement();
                 return ModelResponse.callTool(turn == 0 ? read("first") : new ToolCall("small-" + turn, "small", Map.of()));
-            }, List.of(new ReadFileTool(workspace()), small), 6).run(session);
+            }, List.of(new ReadFileTool(workspace()), small), 14).run(session);
             assertNotNull(session.contextProjection());
             assertNotNull(session.history().getFirst().archivedBody());
             store.saveSnapshot(session);
             id = session.id();
         }
         try (var store = new FileSessionStore(data())) {
-            var restored = store.restore(id, workspace(), 7);
+            var restored = store.restore(id, workspace(), 15);
             restored.contextProjection().validateAgainst(restored.history());
             assertTrue(restored.history().getLast().result().content().equals("done"));
         }
@@ -170,7 +170,7 @@ class HistoryUnloadingTest {
     void archiveReadFailureIsFatalAndDoesNotRepopulateHistoryFromExcerpt() throws Exception {
         UUID id = archivedStop();
         try (var store = new FileSessionStore(data())) {
-            var restored = store.restore(id, workspace(), 6);
+            var restored = store.restore(id, workspace(), 14);
             Path log = data().resolve(id.toString()).resolve("events.jsonl");
             String contents = Files.readString(log);
             Files.writeString(log, contents.substring(0, contents.length() - 1));

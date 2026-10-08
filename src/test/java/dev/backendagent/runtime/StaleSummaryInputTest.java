@@ -42,7 +42,7 @@ class StaleSummaryInputTest {
         patch(s, 9);
         for (int i = 10; i <= 12; i++) read(s, "recent" + i, "current.txt", i);
         s.releaseOldBodies();
-        assertNotNull(s.history().getFirst().archivedBody());
+        assertNull(s.history().getFirst().archivedBody()); // Short history remains inline, stale body still filtered.
         assertNull(new ContextCompactor(new ContextBudget(64000)).plan(s));
         new AgentRuntime(noSummaryModel(), List.of(), 2).run(s);
         assertEquals(1, s.modelCalls());

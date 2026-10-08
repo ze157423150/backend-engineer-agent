@@ -52,3 +52,6 @@ redis-data/
 /reports/*
 !/reports/README.md
 !/reports/第二层真实模型验证记录.txt
+
+# Manually supplied local exercise; not part of the Maven demo fixture.
+/examples/test-repair/test.java

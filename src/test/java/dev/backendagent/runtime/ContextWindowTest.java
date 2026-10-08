@@ -51,7 +51,7 @@ class ContextWindowTest {
             assertEquals(List.of("r5"), view.contextSummary().getNotes().stream().map(SummaryNote::getSourceCallId).toList());
             assertFalse(view.contextProjection().getRecoveryReferences().contains("call_id=r0,"));
             assertTrue(view.contextProjection().getRecoveryReferences().contains("call_id=r4,"));
-            assertEquals(3, view.contextProjection().getPolicyVersion());
+            assertEquals(4, view.contextProjection().getPolicyVersion());
             view.contextProjection().validateAgainst(session.history());
             assertEquals(3, session.contextSummary().getNotes().size()); // Persistence is not rewritten by an age-filtered view.
             assertTrue(session.originalObservation("r0").result().content().contains("evidence-r0"));
@@ -63,8 +63,8 @@ class ContextWindowTest {
         try (var store = new FileSessionStore(data())) {
             var session = fill(store, 9, true);
             var view = new ContextAssembler(new ContextBudget(100000)).assemble(session, List.of(), 10);
-            assertEquals(8, view.history().size());
-            assertEquals("a5", view.history().getFirst().call().id());
+            assertEquals(18, view.history().size());
+            assertEquals("a0", view.history().getFirst().call().id());
             var tight = new ContextAssembler(new ContextBudget(6000)).assemble(session, List.of(), 10);
             assertEquals(2, tight.history().size());
             assertEquals("a8", tight.history().getFirst().call().id());
@@ -84,7 +84,8 @@ class ContextWindowTest {
             assertTrue(plan.getToIndex() <= 12);
             assertFalse(plan.getObservations().stream().anyMatch(exchange -> exchange.call().id().equals("r0")
                     || exchange.call().id().equals("r12")));
-            assertTrue(session.history().get(4).result().content().contains("ARCHIVED_BODY"));
+            assertTrue(session.history().getFirst().result().content().contains("ARCHIVED_BODY"));
+            assertTrue(session.history().get(4).result().content().contains("evidence-r4"));
             assertTrue(plan.getObservations().stream().noneMatch(exchange -> exchange.result().content().contains("ARCHIVED_BODY")));
             var candidate = new ContextCompactor(new ContextBudget(64000)).validate(plan, List.of(note("r4")), session);
             assertEquals(plan.getToIndex(), candidate.getCoveredExchanges());
@@ -113,7 +114,7 @@ class ContextWindowTest {
                 }
                 public ModelResponse execute(ModelRequest request) {
                     assertNull(request.contextSummary());
-                    assertEquals(4, request.history().size());
+                    assertEquals(8, request.history().size());
                     return ModelResponse.callTool(call("r8"));
                 }
             };
@@ -159,7 +160,7 @@ class ContextWindowTest {
                 var diskView = assembler.assemble(durable, List.of(), 10);
                 var memoryView = assembler.assemble(memory, List.of(), 10);
                 assertEquals(json.writeValueAsString(diskView), json.writeValueAsString(memoryView));
-                assertEquals(3, memoryView.contextProjection().getPolicyVersion());
+                assertEquals(4, memoryView.contextProjection().getPolicyVersion());
             }
             var summary = new ContextSummary(1, 15, List.of(note("a0"), note("a5"), note("a14")));
             durable.installSummary(summary);

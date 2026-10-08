@@ -34,7 +34,7 @@ public final class ContextProjection {
             @JsonProperty("recoveryReferences") String recoveryReferences,
             @JsonProperty("history") List<ToolExchange> history,
             @JsonProperty("filteredExchanges") int filteredExchanges) {
-        if ((policyVersion < 1 || policyVersion > 3) || sourceHistorySize < 0 || maxHistoryCharacters <= 0
+        if ((policyVersion < 1 || policyVersion > 4) || sourceHistorySize < 0 || maxHistoryCharacters <= 0
                 || omittedExchanges < 0 || historyCharacters < 0 || historyCharacters > maxHistoryCharacters
                 || compressedExchanges < 0 || recoveryReferences == null || history == null
                 || omittedExchanges + history.size() != sourceHistorySize

@@ -395,6 +395,59 @@ public final class Workspace implements WorkspaceAccess {
         }
     }
 
+    /** Trusted terminal synchronization only, never exposed as a model tool. Null means absent. */
+    String synchronizationText(String path) throws IOException {
+        Path file = synchronizationPath(path);
+        if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) return null;
+        if (!readableText(file)) throw new IOException("不能同步非普通文本文件：" + path);
+        return StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(boundedFileBytes(file))).toString();
+    }
+
+    private Path synchronizationPath(String path) throws IOException {
+        if (path == null || path.isBlank()) throw new IOException("同步路径为空");
+        Path input = Path.of(path);
+        Path candidate = root.resolve(input).normalize();
+        if (input.isAbsolute() || !candidate.startsWith(root) || candidate.equals(root)
+                || !input.normalize().equals(input)) throw new IOException("同步路径必须位于工作区内");
+        Path parent = resolve(relative(candidate.getParent()));
+        Path file = parent.resolve(candidate.getFileName());
+        if (!Files.isDirectory(parent) || !visible(file) || !textExtension(file))
+            throw new IOException("同步路径受保护或父目录不存在：" + path);
+        return file;
+    }
+
+    /** Compare again immediately before each write; existing files use an atomic replacement. */
+    void synchronizationWrite(String path, String expectedHash, String content) throws IOException {
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_FILE_BYTES || content.indexOf('\0') >= 0)
+            throw new IOException("同步内容超过限制：" + path);
+        Path file = synchronizationPath(path);
+        String before = synchronizationText(path);
+        String actualHash = before == null ? null : dev.backendagent.history.ArchivedBody.hash(before);
+        if (!java.util.Objects.equals(expectedHash, actualHash)) throw new IOException("原文件已改变，拒绝覆盖：" + path);
+        if (before == null) {
+            try (var channel = Files.newByteChannel(file, StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+                var buffer = ByteBuffer.wrap(bytes);
+                while (buffer.hasRemaining()) channel.write(buffer);
+            }
+            return;
+        }
+        if (Files.getFileStore(file).supportsFileAttributeView("unix")
+                && ((Number) Files.getAttribute(file, "unix:nlink")).intValue() > 1)
+            throw new IOException("不允许同步硬链接文件：" + path);
+        Path temporary = Files.createTempFile(file.getParent(), ".agent-sync-", ".tmp");
+        try {
+            Files.write(temporary, bytes);
+            if (Files.getFileStore(file).supportsFileAttributeView("posix"))
+                Files.setPosixFilePermissions(temporary, Files.getPosixFilePermissions(file));
+            if (!synchronizationPath(path).equals(file)
+                    || !java.util.Objects.equals(before, synchronizationText(path)))
+                throw new IOException("写回前原文件发生变化：" + path);
+            Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally { Files.deleteIfExists(temporary); }
+    }
+
     /** Snapshot comparison for files changed by this workspace; independent of Git repository state. */
     public ToolResult diff(String relativePath) {
         try {

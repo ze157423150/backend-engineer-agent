@@ -33,7 +33,7 @@ class HistoricalEvidenceIntegrationTest {
             new AgentRuntime(request -> ModelResponse.callTool(calls.get(next.getAndIncrement())), tools(session, workspace, store), 4).run(session);
             assertEquals(AgentSession.Status.BUDGET_EXHAUSTED, session.status());
             assertEquals(1, session.historicalEvidence().size());
-            assertEquals(2, json.readTree(Files.readString(store.sessionDirectory(session.id()).resolve("checkpoint.json"))).path("schemaVersion").asInt());
+            assertEquals(3, json.readTree(Files.readString(store.sessionDirectory(session.id()).resolve("checkpoint.json"))).path("schemaVersion").asInt());
             return session.id();
         }
     }

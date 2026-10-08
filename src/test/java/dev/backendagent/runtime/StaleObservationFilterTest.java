@@ -97,7 +97,7 @@ class StaleObservationFilterTest {
         session.installSummary(summary);
         for (int i = 3; i <= 6; i++) session.remember(entry("recent-" + i, "list_files", ".", i, true, "Main.java"));
         var request = assemble(session);
-        assertEquals(List.of(currentNote), request.contextSummary().getNotes());
+        assertNull(request.contextSummary()); // Current original is retained; do not duplicate its note.
         assertEquals(java.util.Set.of("read"), request.staleSummarySourceIds());
         assertTrue(request.workingMemory().isEmpty());
         assertEquals(2, session.contextSummary().getNotes().size());
@@ -111,7 +111,7 @@ class StaleObservationFilterTest {
         var session = session(raw.toArray(ToolExchange[]::new));
         var projection = new ContextAssembler(new ContextBudget(1000)).assemble(session, List.of(), 2).contextProjection();
         assertEquals(0, projection.getOmittedExchanges());
-        assertEquals(3, projection.getPolicyVersion());
+        assertEquals(4, projection.getPolicyVersion());
         assertTrue(projection.getHistoryCharacters() <= 1000);
         projection.validateAgainst(raw);
         var legacy = new ContextAssembler(new ContextBudget(20000)).project(raw, false);

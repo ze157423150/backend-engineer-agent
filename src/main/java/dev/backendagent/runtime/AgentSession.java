@@ -17,16 +17,20 @@ public final class AgentSession {
     public enum Status { CREATED, RUNNING, COMPACTING, WAITING_FOR_TOOL, COMPLETED, FAILED, BUDGET_EXHAUSTED }
 
     public enum EventType {
-        SESSION_STARTED, REQUEST_BUDGET_CHECKED, COMPACTION_STARTED, COMPACTION_COMPLETED, COMPACTION_FAILED, CONTEXT_ASSEMBLED, MODEL_CALL_STARTED, MODEL_RESPONSE_RECEIVED,
+        CONVERSATION_COMPACTION_STARTED, CONVERSATION_COMPACTION_COMPLETED, CONVERSATION_COMPACTION_FAILED, CONVERSATION_SUMMARY_SKIPPED, CONVERSATION_SUMMARY_ATTEMPTED, USER_TURN_STARTED, SESSION_STARTED, REQUEST_BUDGET_CHECKED, COMPACTION_STARTED, COMPACTION_COMPLETED, COMPACTION_FAILED, CONTEXT_ASSEMBLED, MODEL_CALL_STARTED, MODEL_RESPONSE_RECEIVED, MODEL_CALL_FAILED, MODEL_RETRY_SCHEDULED,
         TOOL_CALL_REQUESTED, TOOL_EXECUTION_SUCCEEDED, TOOL_EXECUTION_FAILED, WORKING_MEMORY_UPDATED, FILE_EVIDENCE_INVALIDATED,
         WORKSPACE_REVISION_ADVANCED, TEST_RESULT_RECORDED,
-        WORKING_MEMORY_LOADED, HISTORY_BODIES_ARCHIVED, HISTORICAL_EVIDENCE_UPDATED, WINDOW_SUMMARY_ATTEMPTED, WINDOW_SUMMARY_SKIPPED, SESSION_RESUMED, SESSION_COMPLETED, SESSION_FAILED, BUDGET_EXHAUSTED
+        WORKING_MEMORY_LOADED, HISTORY_BODIES_ARCHIVED, HISTORICAL_EVIDENCE_UPDATED, WINDOW_SUMMARY_ATTEMPTED, WINDOW_SUMMARY_SKIPPED, SESSION_RESUMED, SESSION_COMPLETED, SESSION_FAILED, BUDGET_EXHAUSTED,
+        TOOL_BATCH_STARTED, TOOL_BATCH_PROGRESS, TOOL_BATCH_COMPLETED, TOOL_CALL_RETRY_AUTHORIZED, TOOL_EXECUTION_STARTED
     }
 
     public record Event(long sequence, EventType type, String detail) {}
 
     private final UUID id;
     private final String objective;
+    private final List<ConversationTurn> completedTurns = new ArrayList<>();
+    private String currentUserMessage;
+    private int turnStartHistoryIndex;
     private final List<Event> events = new ArrayList<>();
     private final List<ToolExchange> history = new ArrayList<>();
     private final WorkingMemory workingMemory = new WorkingMemory();
@@ -37,21 +41,26 @@ public final class AgentSession {
     private String answer;
     private ContextProjection contextProjection;
     private ContextSummary contextSummary;
+    private ConversationSummary conversationSummary;
+    private SessionFailure failure;
+    private PendingToolBatch pendingToolBatch;
+    private boolean inFlightRetryValidated;
     private WorkspaceState workspaceState = WorkspaceState.initial();
     private final SessionEventSink eventSink;
     private final dev.backendagent.history.ObservationArchive archive;
-    public static final int RECENT_FULL_BATCHES = ContextWindowPolicy.RECENT_BATCHES;
+    public static final int RECENT_FULL_BATCHES = ContextWindowPolicy.RECENT_BATCHES + ContextWindowPolicy.SUMMARY_BATCHES;
 
     public AgentSession(String objective) {
         this(objective, (session, event, payload) -> { });
     }
 
     public AgentSession(String objective, SessionEventSink eventSink) {
-        if (Objects.requireNonNull(objective).isBlank()) {
-            throw new IllegalArgumentException("Objective must not be blank");
+        if (Objects.requireNonNull(objective).isBlank() || objective.length() > 8000) {
+            throw new IllegalArgumentException("Objective must be nonblank and at most 8000 characters");
         }
         this.id = UUID.randomUUID();
         this.objective = objective;
+        this.currentUserMessage = objective;
         this.eventSink = Objects.requireNonNull(eventSink);
         this.archive = eventSink.observationArchive(this);
     }
@@ -60,6 +69,16 @@ public final class AgentSession {
                          List<Event> recordedEvents, SessionEventSink eventSink) {
         this.id = checkpoint.getSessionId();
         this.objective = checkpoint.getObjective();
+        if (checkpoint.getTurns().isEmpty()) {
+            this.currentUserMessage = objective;
+        } else {
+            var savedTurns = checkpoint.getTurns();
+            completedTurns.addAll(savedTurns.subList(0, savedTurns.size() - 1));
+            var current = savedTurns.getLast();
+            currentUserMessage = current.getUserMessage();
+            turnStartHistoryIndex = current.getStartHistoryIndex();
+            answer = current.getAnswer();
+        }
         this.status = checkpoint.getStatus();
         this.modelCalls = checkpoint.getModelCalls();
         this.eventSink = Objects.requireNonNull(eventSink);
@@ -72,6 +91,11 @@ public final class AgentSession {
         this.workspaceState = WorkspaceState.fromHistory(checkpoint.getHistory());
         this.contextProjection = checkpoint.getContextProjection();
         this.contextSummary = checkpoint.getContextSummary();
+        this.conversationSummary = checkpoint.getConversationSummary();
+        this.failure = checkpoint.getFailure();
+        this.pendingToolBatch = checkpoint.getPendingToolBatch();
+        this.inFlightRetryValidated = pendingToolBatch != null && pendingToolBatch.getPreExecutionHashes() != null
+                && pendingToolBatch.getPreExecutionHashes().equals(checkpoint.getWorkspaceHashes());
         this.staleEvidenceIds.addAll(checkpoint.getStaleEvidenceIds());
         // Older checkpoints have no workspaceState. Derive historical test invalidation as well.
         invalidateHistoricalTests();
@@ -98,11 +122,22 @@ public final class AgentSession {
                 saved.archivedBody().verify(saved.archivedBody().getEventSequence(), originals.get(i), saved);
             }
         }
-        if (checkpoint.getStatus() != Status.BUDGET_EXHAUSTED
+        if ((checkpoint.getStatus() != Status.BUDGET_EXHAUSTED && checkpoint.getStatus() != Status.COMPLETED
+                && checkpoint.getStatus() != Status.FAILED)
                 || checkpoint.getLastEventSequence() != recordedEvents.size()
                 || recordedEvents.isEmpty()
-                || recordedEvents.getLast().type() != EventType.BUDGET_EXHAUSTED) {
-            throw new IllegalArgumentException("Only a complete budget-stop checkpoint can be restored");
+                || recordedEvents.getLast().type() != (checkpoint.getStatus() == Status.COMPLETED ? EventType.SESSION_COMPLETED
+                    : checkpoint.getStatus() == Status.FAILED ? EventType.SESSION_FAILED : EventType.BUDGET_EXHAUSTED)) {
+            throw new IllegalArgumentException("Only a complete execution boundary can be restored");
+        }
+        if (checkpoint.getStatus() == Status.FAILED && (checkpoint.getFailure() == null
+                || (!checkpoint.getFailure().canResume() && checkpoint.getPendingToolBatch() == null)
+                || checkpoint.getFailure().getModelCallNumber() != checkpoint.getModelCalls()
+                || checkpoint.getFailure().getCompletedExchanges() != checkpoint.getHistory().size())) {
+            throw new IllegalArgumentException("Failed checkpoint is not a recoverable tool-batch boundary");
+        }
+        if (checkpoint.getPendingToolBatch() != null && checkpoint.getStatus() != Status.FAILED) {
+            throw new IllegalArgumentException("Only failed recovery can restore a pending tool batch");
         }
         var ids = new HashSet<String>();
         long recordedRevision = 0;
@@ -145,18 +180,107 @@ public final class AgentSession {
         if (!replayed.snapshot().equals(checkpoint.getHistoricalEvidence())) {
             throw new IllegalArgumentException("Checkpoint historical evidence differs from successful retrievals");
         }
+        validateTurns(checkpoint);
+        if(checkpoint.getConversationSummary()!=null) checkpoint.getConversationSummary().validateAgainst(checkpoint.getTurns());
         return new AgentSession(checkpoint, recordedEvents, eventSink);
+    }
+
+    private static void validateTurns(dev.backendagent.persistence.SessionCheckpoint checkpoint) {
+        int end = 0;
+        var turns = checkpoint.getTurns();
+        if (checkpoint.getSchemaVersion() >= 3 && turns.isEmpty()) throw new IllegalArgumentException("Missing conversation turns");
+        for (int i = 0; i < turns.size(); i++) {
+            var turn = turns.get(i);
+            if (turn.getTurnId() != i + 1 || turn.getStartHistoryIndex() != end
+                    || turn.getEndHistoryIndex() > checkpoint.getHistory().size()
+                    || (i < turns.size() - 1 && turn.getStatus() != Status.COMPLETED)) {
+                throw new IllegalArgumentException("Conversation turn ranges or status disagree with history");
+            }
+            end = turn.getEndHistoryIndex();
+        }
+        if (!turns.isEmpty() && (end != checkpoint.getHistory().size()
+                || turns.getLast().getStatus() != checkpoint.getStatus()
+                || !turns.getFirst().getUserMessage().equals(checkpoint.getObjective()))) {
+            throw new IllegalArgumentException("Conversation turns disagree with checkpoint");
+        }
+    }
+
+    public List<ConversationTurn> turns() {
+        var turns = new ArrayList<>(completedTurns);
+        turns.add(new ConversationTurn(turns.size() + 1, currentUserMessage, status, answer,
+                turnStartHistoryIndex, history.size()));
+        return List.copyOf(turns);
+    }
+    public ConversationSummary conversationSummary() { return conversationSummary; }
+    public SessionFailure failure() { return failure; }
+    public PendingToolBatch pendingToolBatch() { return pendingToolBatch; }
+    void setPendingToolBatch(PendingToolBatch batch) { pendingToolBatch = batch; }
+    public void capturePendingToolHashes(java.util.Map<String, String> hashes) {
+        if (pendingToolBatch != null && pendingToolBatch.isInFlight()
+                && pendingToolBatch.getPreExecutionHashes() == null) {
+            pendingToolBatch = pendingToolBatch.withPreExecutionHashes(hashes);
+        }
+    }
+    void installConversationSummary(ConversationSummary summary) { conversationSummary=summary; }
+    int lastConversationSummaryAttemptEnd() {
+        for(int i=events.size()-1;i>=0;i--) {
+            var event=events.get(i);
+            if(event.type()==EventType.CONVERSATION_SUMMARY_ATTEMPTED || event.type()==EventType.CONVERSATION_SUMMARY_SKIPPED)
+                return Integer.parseInt(event.detail());
+        }
+        return 0;
+    }
+    public String currentTask() { return currentUserMessage; }
+
+    void continueWith(String message) {
+        if (status != Status.COMPLETED) throw new IllegalStateException("Only a completed turn accepts a new user message");
+        if (completedTurns.size() >= 31) throw new IllegalArgumentException("Conversation currently supports at most 32 turns");
+        var next = new ConversationTurn(completedTurns.size() + 2, message, Status.RUNNING, null, history.size(), history.size());
+        completedTurns.add(turns().getLast());
+        currentUserMessage = next.getUserMessage();
+        turnStartHistoryIndex = history.size();
+        answer = null;
+        status = Status.RUNNING;
+        append(EventType.USER_TURN_STARTED, "turn=" + next.getTurnId(), next);
+        checkpoint();
     }
 
     public Set<String> staleEvidenceIds() { return Set.copyOf(staleEvidenceIds); }
     void checkpoint() { eventSink.checkpoint(this); }
 
-    void resume() {
-        if (status != Status.BUDGET_EXHAUSTED) {
-            throw new IllegalStateException("Only budget-exhausted sessions can resume");
+    void resume() { resume(false); }
+    void resume(boolean retryInFlight) {
+        if (status != Status.BUDGET_EXHAUSTED && (status != Status.FAILED || failure == null
+                || (!failure.canResume() && !(retryInFlight && pendingToolBatch != null)))) {
+            throw new IllegalStateException("Only budget stops or recoverable failed sessions can resume");
         }
+        if (pendingToolBatch != null && pendingToolBatch.isInFlight() && (!retryInFlight || !inFlightRetryValidated)) {
+            throw new IllegalStateException("In-flight tool requires explicit retry and verified unchanged workspace");
+        }
+        var previousFailure = failure;
         status = Status.RUNNING;
-        append(EventType.SESSION_RESUMED, "Continuing after model call " + modelCalls);
+        failure = null;
+        if (pendingToolBatch != null && pendingToolBatch.isInFlight()) {
+            append(EventType.TOOL_CALL_RETRY_AUTHORIZED,
+                    pendingToolBatch.getCalls().get(pendingToolBatch.getNextCallIndex()).id(), pendingToolBatch);
+            pendingToolBatch = pendingToolBatch.retrying();
+            inFlightRetryValidated = false;
+        }
+        append(EventType.SESSION_RESUMED, "Continuing after model call " + modelCalls
+                + (previousFailure == null ? "" : "; recovering failed turn"), previousFailure);
+        checkpoint();
+    }
+
+    void fail(RuntimeException cause, boolean completeToolBatch) {
+        String type = cause.getClass().getSimpleName();
+        failure = new SessionFailure(completeToolBatch ? SessionFailure.Boundary.COMPLETE_TOOL_BATCH
+                : pendingToolBatch == null ? SessionFailure.Boundary.INCOMPLETE_TOOL_BATCH
+                : pendingToolBatch.isInFlight() ? SessionFailure.Boundary.TOOL_IN_FLIGHT
+                : SessionFailure.Boundary.BETWEEN_TOOLS, modelCalls, history.size(),
+                type.isBlank() ? "RuntimeException" : type);
+        transitionTo(Status.FAILED);
+        append(EventType.SESSION_FAILED, type + ": " + cause.getMessage(), failure);
+        if (failure.canResume() || pendingToolBatch != null) checkpoint();
     }
 
     public UUID id() { return id; }

@@ -37,6 +37,7 @@ class DeepSeekModelClientTest {
     private final List<JsonNode> requests = new CopyOnWriteArrayList<>();
     private final AtomicReference<String> authorization = new AtomicReference<>();
     private final AtomicInteger status = new AtomicInteger(200);
+    private final ConcurrentLinkedQueue<Integer> statuses = new ConcurrentLinkedQueue<>();
     private final AtomicInteger responseDelayMillis = new AtomicInteger();
     @TempDir
     Path repository;
@@ -68,7 +69,8 @@ class DeepSeekModelClientTest {
                 }
                 byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
-                exchange.sendResponseHeaders(status.get(), bytes.length);
+                Integer nextStatus = statuses.poll();
+                exchange.sendResponseHeaders(nextStatus == null ? status.get() : nextStatus, bytes.length);
                 exchange.getResponseBody().write(bytes);
             } finally {
                 exchange.close();
@@ -80,6 +82,101 @@ class DeepSeekModelClientTest {
     @AfterEach
     void stopServer() {
         server.stop(0);
+    }
+
+    @Test
+    void invalidToolArgumentsRetryBeforeAnyToolRunsAndKeepIdenticalRequests() {
+        responses.add(toolResponse("{\"path\":42}"));
+        responses.add(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":1,\"end_line\":20}"));
+        responses.add(finalResponse("done"));
+        var session = new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)), List.of(readTool), 4).run(session);
+        assertEquals(AgentSession.Status.COMPLETED, session.status());
+        assertEquals(3, session.modelCalls());
+        assertEquals(1, session.history().size());
+        assertEquals(requests.get(0), requests.get(1));
+        var failure = session.events().stream().filter(e -> e.type() == AgentSession.EventType.MODEL_CALL_FAILED).findFirst().orElseThrow();
+        assertTrue(failure.detail().contains("INVALID_TOOL_ARGUMENTS"));
+        assertEquals(1, session.events().stream().filter(e -> e.type() == AgentSession.EventType.TOOL_CALL_REQUESTED).count());
+    }
+
+    @Test
+    void transientHttpErrorRetriesButDoesNotPersistErrorBody() {
+        statuses.add(503); statuses.add(200);
+        responses.add("server echoed test-key and private content"); responses.add(finalResponse("done"));
+        var session = new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)), List.of(readTool), 4).run(session);
+        assertEquals(AgentSession.Status.COMPLETED, session.status());
+        assertEquals(2, session.modelCalls());
+        assertTrue(session.events().stream().anyMatch(e -> e.detail().contains("httpStatus=503")));
+        assertFalse(session.events().toString().contains("test-key"));
+        assertFalse(session.events().toString().contains("private content"));
+    }
+
+    @Test
+    void repeatedErrorsStopAfterThreeAttempts() {
+        status.set(429);
+        var session = new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)), List.of(readTool), 10).run(session);
+        assertEquals(AgentSession.Status.FAILED, session.status());
+        assertEquals(3, session.modelCalls());
+        assertEquals(3, requests.size());
+        assertEquals(2, session.events().stream().filter(e -> e.type() == AgentSession.EventType.MODEL_RETRY_SCHEDULED).count());
+        assertTrue(session.failure().canResume());
+    }
+
+    @Test
+    void retryCannotExceedSessionBudget() {
+        status.set(503);
+        var session = new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)), List.of(readTool), 2).run(session);
+        assertEquals(AgentSession.Status.FAILED, session.status());
+        assertEquals(2, session.modelCalls());
+        assertEquals(2, requests.size());
+    }
+
+    @Test
+    void lengthIsDiagnosedWithoutReplayingPartialToolCalls() throws Exception {
+        var root = (ObjectNode) json.readTree(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":1,\"end_line\":20}"));
+        ((ObjectNode) root.path("choices").get(0)).put("finish_reason", "length");
+        responses.add(root.toString());
+        var session = new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)), List.of(readTool), 10).run(session);
+        assertEquals(1, session.modelCalls());
+        assertTrue(session.history().isEmpty());
+        assertTrue(session.events().stream().anyMatch(e -> e.detail().contains("code=OUTPUT_LIMIT, finishReason=LENGTH")));
+        assertFalse(session.events().stream().anyMatch(e -> e.type() == AgentSession.EventType.TOOL_CALL_REQUESTED));
+    }
+
+    @Test
+    void unknownFinishReasonIsRedactedAndNotRetried() throws Exception {
+        var root = (ObjectNode) json.readTree(finalResponse("private content"));
+        ((ObjectNode) root.path("choices").get(0)).put("finish_reason", "server echoed test-key");
+        responses.add(root.toString());
+        var session = new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)), List.of(readTool), 10).run(session);
+        assertEquals(1, session.modelCalls());
+        assertTrue(session.events().stream().anyMatch(e -> e.detail().contains("finishReason=OTHER")));
+        assertFalse(session.events().toString().contains("test-key"));
+        assertFalse(session.events().toString().contains("private content"));
+    }
+
+    @Test
+    void invalidEnvelopeJsonCanRecoverOnNextAttempt() {
+        responses.add("{bad-json private content"); responses.add(finalResponse("done"));
+        var session = new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)), List.of(readTool), 4).run(session);
+        assertEquals(AgentSession.Status.COMPLETED, session.status());
+        assertEquals(2, session.modelCalls());
+        assertTrue(session.events().stream().anyMatch(e -> e.detail().contains("code=INVALID_JSON")));
+        assertFalse(session.events().toString().contains("private content"));
+    }
+
+    @Test
+    void trailingToolArgumentJsonIsRejectedBeforeExecution() {
+        responses.add(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":1,\"end_line\":20} {}"));
+        var failure = assertThrows(ModelCallFailure.class, () -> client(Duration.ofSeconds(5)).execute(request()));
+        assertEquals(ModelFailureDiagnostic.Code.INVALID_TOOL_ARGUMENTS, failure.getDiagnostic().getCode());
     }
 
     @Test
@@ -162,19 +259,18 @@ class DeepSeekModelClientTest {
         JsonNode second = requests.get(1);
         assertEquals("auto", second.path("tool_choice").asText());
         JsonNode messages = second.path("messages");
-        assertEquals(6, messages.size());
-        assertEquals("historical_observation_reference_data", json.readTree(messages.get(3).path("content").asText()).path("kind").asText());
+        assertEquals(5, messages.size());
         assertEquals("user", messages.get(1).path("role").asText());
-        assertEquals("read repository code", messages.get(1).path("content").asText());
-        assertEquals("assistant", messages.get(4).path("role").asText());
-        assertEquals("我先读取代码。", messages.get(4).path("content").asText());
-        JsonNode replayedCall = messages.get(4).path("tool_calls").get(0);
+        assertEquals("read repository code", messages.get(2).path("content").asText());
+        assertEquals("assistant", messages.get(3).path("role").asText());
+        assertEquals("我先读取代码。", messages.get(3).path("content").asText());
+        JsonNode replayedCall = messages.get(3).path("tool_calls").get(0);
         assertEquals("call-1", replayedCall.path("id").asText());
         JsonNode replayedArguments = json.readTree(replayedCall.path("function").path("arguments").asText());
         assertEquals("OrderService.java", replayedArguments.path("path").asText());
-        assertEquals("tool", messages.get(5).path("role").asText());
-        assertEquals("call-1", messages.get(5).path("tool_call_id").asText());
-        JsonNode result = json.readTree(messages.get(5).path("content").asText());
+        assertEquals("tool", messages.get(4).path("role").asText());
+        assertEquals("call-1", messages.get(4).path("tool_call_id").asText());
+        JsonNode result = json.readTree(messages.get(4).path("content").asText());
         assertTrue(result.path("successful").asBoolean());
         assertTrue(result.path("content").asText().contains("cache.evict(id)"));
         assertEquals("call-1", result.path("evidence").path("sourceCallId").asText());
@@ -191,7 +287,7 @@ class DeepSeekModelClientTest {
         var session = new AgentSession("read missing repository file");
         new AgentRuntime(client(Duration.ofSeconds(5)), List.of(readTool), 4).run(session);
 
-        JsonNode result = json.readTree(requests.get(1).path("messages").get(5).path("content").asText());
+        JsonNode result = json.readTree(requests.get(1).path("messages").get(4).path("content").asText());
         assertFalse(result.path("successful").asBoolean());
         assertTrue(result.path("content").asText().contains("文件不可读取"));
         assertEquals(AgentSession.Status.COMPLETED, session.status());
@@ -234,7 +330,58 @@ class DeepSeekModelClientTest {
 
         assertEquals(AgentSession.Status.FAILED, session.status());
         assertTrue(session.history().isEmpty());
-        assertEquals(1, requests.size());
+        assertEquals(3, requests.size());
+    }
+
+    @Test
+    void integerLineArgumentsAreNormalizedAndReplayedWithoutChangingToolMap() throws IOException {
+        responses.add(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":1,\"end_line\":20}"));
+        responses.add(finalResponse("done"));
+        var session = new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)), List.of(readTool), 2).run(session);
+
+        assertEquals(AgentSession.Status.COMPLETED, session.status());
+        assertTrue(session.history().getFirst().result().successful());
+        assertEquals("1", session.history().getFirst().call().arguments().get("start_line"));
+        var properties = requests.getFirst().path("tools").get(0).path("function")
+                .path("parameters").path("properties");
+        assertEquals("integer", properties.path("start_line").path("type").asText());
+        assertEquals("string", properties.path("path").path("type").asText());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1.5", "true", "null", "{}", "[]"})
+    void nonIntegerLineArgumentsCannotExecuteTools(String value) throws IOException {
+        responses.add(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":" + value + ",\"end_line\":20}"));
+        var session = new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)), List.of(readTool), 2).run(session);
+        assertEquals(AgentSession.Status.FAILED, session.status());
+        assertTrue(session.history().isEmpty());
+    }
+
+    @Test
+    void historyCursorAndLimitAcceptIntegerJsonValues() throws IOException {
+        var response = (ObjectNode) json.readTree(toolResponse("{}"));
+        var function = (ObjectNode) response.path("choices").get(0).path("message")
+                .path("tool_calls").get(0).path("function");
+        function.put("name", "search_turns").put("arguments",
+                "{\"keyword\":\"inspect\",\"role\":\"user\",\"before_turn\":0,\"limit\":5}");
+        responses.add(response.toString());
+        responses.add(finalResponse("done"));
+        var session = new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)),
+                List.of(new dev.backendagent.tools.SearchTurnsTool(session)), 2).run(session);
+        assertEquals(AgentSession.Status.COMPLETED, session.status());
+        assertTrue(session.history().getFirst().result().successful());
+        assertEquals("5", session.history().getFirst().call().arguments().get("limit"));
+    }
+
+    @Test
+    void largeIntegerArgumentsReachRangeValidationWithoutOverflow() throws IOException {
+        responses.add(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":9223372036854775808,\"end_line\":20}"));
+        var result = client(Duration.ofSeconds(5)).execute(request());
+        assertEquals("9223372036854775808", result.getToolCalls().getFirst().arguments().get("start_line"));
+        assertFalse(readTool.execute(result.getToolCalls().getFirst().arguments()).successful());
     }
 
     @Test
@@ -249,9 +396,9 @@ class DeepSeekModelClientTest {
         assertEquals(3, session.modelCalls());
         assertEquals(4, session.history().size());
         JsonNode messages = requests.get(2).path("messages");
-        assertEquals(10, messages.size());
+        assertEquals(9, messages.size());
         for (int batch = 0; batch < 2; batch++) {
-            int offset = 4 + batch * 3;
+            int offset = 3 + batch * 3;
             assertEquals("assistant", messages.get(offset).path("role").asText());
             assertEquals("我先读取代码。", messages.get(offset).path("content").asText());
             assertEquals(2, messages.get(offset).path("tool_calls").size());
@@ -294,7 +441,7 @@ class DeepSeekModelClientTest {
 
         assertEquals(AgentSession.Status.FAILED, session.status());
         assertTrue(session.history().isEmpty());
-        assertTrue(session.events().getLast().detail().contains("do not match"));
+        assertTrue(session.events().stream().anyMatch(e -> e.detail().contains("INVALID_TOOL_ARGUMENTS")));
     }
 
     @ParameterizedTest
@@ -363,6 +510,42 @@ class DeepSeekModelClientTest {
         assertEquals(5, messages.size());
         assertEquals("recent", messages.get(3).path("tool_calls").get(0).path("id").asText());
         assertEquals("recent", messages.get(4).path("tool_call_id").asText());
+    }
+
+    @Test
+    void appendsNewUserMessageAfterPreviousAnswerAndToolHistory() throws Exception {
+        var exchange = new ToolExchange(new ToolCall("first-read", "read_file", java.util.Map.of("path", "Main.java")),
+                new ToolResult(true, "old code"), "reading", 1);
+        var turns = List.of(
+                new dev.backendagent.runtime.ConversationTurn(1, "use 90 percent", dev.backendagent.runtime.AgentSession.Status.COMPLETED, "first answer", 0, 1),
+                new dev.backendagent.runtime.ConversationTurn(2, "change to 80 percent", dev.backendagent.runtime.AgentSession.Status.RUNNING, null, 1, 1));
+        var request = new ModelRequest("use 90 percent", List.of(exchange), List.of(), 3, 0, 100,
+                List.of(), null, null, java.util.Set.of(), dev.backendagent.runtime.WorkspaceState.initial(), List.of(), turns);
+        var messages = client(Duration.ofSeconds(5)).buildRequest(request).path("messages");
+        var transcript = new java.util.ArrayList<String>();
+        for (var message : messages) transcript.add(message.path("content").asText());
+        int first = transcript.indexOf("use 90 percent");
+        int answer = transcript.indexOf("first answer");
+        int latest = transcript.indexOf("change to 80 percent");
+        assertTrue(first < answer && answer < latest);
+        assertEquals(messages.size() - 1, latest);
+        assertEquals("assistant", messages.get(first + 1).path("role").asText());
+        assertEquals("tool", messages.get(first + 2).path("role").asText());
+    }
+
+    @Test
+    void sendsDialogueSourcesWithoutPretendingTheyAreToolObservations() throws Exception {
+        var input = new ConversationSummaryRequest("current", null, 0, 1, 4000,
+                List.of(new ConversationMessage("turn-1-user",1,"user","满100九折")));
+        responses.add(finalResponse("{\"notes\":[{\"kind\":\"PROGRESS\",\"statement\":\"第1轮要求九折\","
+                + "\"sourceCallId\":\"turn-1-user\",\"evidenceQuote\":\"满100九折\"}]}"));
+        var notes = client(Duration.ofSeconds(5)).summarizeConversation(input);
+        assertEquals("turn-1-user",notes.getFirst().getSourceCallId());
+        var body=requests.getLast();
+        assertFalse(body.has("tools"));
+        var reference=json.readTree(body.path("messages").get(1).path("content").asText());
+        assertEquals("turn-1-user",reference.path("messages").get(0).path("id").asText());
+        assertFalse(reference.has("observations"));
     }
 
     private SummaryRequest summaryRequest() {

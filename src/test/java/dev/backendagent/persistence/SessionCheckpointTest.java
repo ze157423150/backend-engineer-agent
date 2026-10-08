@@ -272,7 +272,7 @@ class SessionCheckpointTest {
             // The checkpoint includes the third tool result and the last view sent before that result.
             id = session.id();
             assertEquals(0, session.contextProjection().getCompressedExchanges());
-            assertEquals(3, session.contextProjection().getPolicyVersion());
+            assertEquals(4, session.contextProjection().getPolicyVersion());
         }
         try (var store = new FileSessionStore(data())) {
             var restored = store.restore(id, workspace(), 4);
@@ -488,7 +488,11 @@ class SessionCheckpointTest {
             Tool sabotage = new Tool() {
                 public String name() { return "sabotage"; }
                 public dev.backendagent.model.ToolResult execute(Map<String, String> args) {
-                    try { Files.createDirectory(store.sessionDirectory(session.id()).resolve("checkpoint.json")); }
+                    try {
+                        Path checkpoint = store.sessionDirectory(session.id()).resolve("checkpoint.json");
+                        Files.deleteIfExists(checkpoint);
+                        Files.createDirectory(checkpoint);
+                    }
                     catch (IOException failure) { throw new IllegalStateException(failure); }
                     return new dev.backendagent.model.ToolResult(true, "done");
                 }

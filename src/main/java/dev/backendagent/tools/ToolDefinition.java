@@ -3,7 +3,7 @@ package dev.backendagent.tools;
 import java.util.Map;
 import java.util.Objects;
 
-/** In this increment, all tool parameters are required strings. */
+/** Required parameter descriptions. The model adapter normalizes integer arguments to the string map. */
 public final class ToolDefinition {
     private final String name;
     private final String description;

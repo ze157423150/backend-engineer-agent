@@ -14,7 +14,22 @@ public record ModelRequest(String objective, List<ToolExchange> history,
                            int omittedExchanges, long historyCharacters, List<MemoryFact> workingMemory,
                            ContextProjection contextProjection, ContextSummary contextSummary,
                            Set<String> staleSummarySourceIds, WorkspaceState workspaceState,
-                           List<dev.backendagent.history.HistoricalEvidence> historicalEvidence) {
+                           List<dev.backendagent.history.HistoricalEvidence> historicalEvidence,
+                           List<dev.backendagent.runtime.ConversationTurn> turns,
+                           dev.backendagent.runtime.ConversationSummary conversationSummary, int latestTurnId) {
+    public ModelRequest(String objective,List<ToolExchange> history,List<ToolDefinition> tools,int remaining,
+            int omitted,long characters,List<MemoryFact> memory,ContextProjection projection,ContextSummary summary,
+            Set<String> stale,WorkspaceState state,List<dev.backendagent.history.HistoricalEvidence> evidence,
+            List<dev.backendagent.runtime.ConversationTurn> turns) {
+        this(objective,history,tools,remaining,omitted,characters,memory,projection,summary,stale,state,evidence,turns,null,
+                turns.isEmpty()?0:turns.getLast().getTurnId());
+    }
+    public ModelRequest(String objective, List<ToolExchange> history, List<ToolDefinition> tools,
+            int remainingCalls, int omitted, long characters, List<MemoryFact> memory, ContextProjection projection,
+            ContextSummary summary, Set<String> stale, WorkspaceState state,
+            List<dev.backendagent.history.HistoricalEvidence> evidence) {
+        this(objective, history, tools, remainingCalls, omitted, characters, memory, projection, summary, stale, state, evidence, List.of());
+    }
     public ModelRequest(String objective, List<ToolExchange> history, List<ToolDefinition> availableTools,
             int remainingModelCalls, int omittedExchanges, long historyCharacters, List<MemoryFact> workingMemory,
             ContextProjection contextProjection, ContextSummary contextSummary, Set<String> staleSummarySourceIds, WorkspaceState workspaceState) {
@@ -57,6 +72,7 @@ public record ModelRequest(String objective, List<ToolExchange> history,
     }
 
     public ModelRequest {
+        turns = List.copyOf(turns);
         history = List.copyOf(history);
         availableTools = List.copyOf(availableTools);
         workingMemory = List.copyOf(workingMemory);

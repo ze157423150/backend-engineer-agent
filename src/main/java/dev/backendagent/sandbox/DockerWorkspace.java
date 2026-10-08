@@ -161,7 +161,7 @@ public final class DockerWorkspace implements WorkspaceAccess {
                     var cleanup = runner.run(List.of("docker", "rm", "-f", name), Duration.ofSeconds(10));
                     if (cleanup.isTimedOut() || (cleanup.getExitCode() != 0 && !cleanup.getOutput().contains("No such container"))) {
                         uncertainMutation = true;
-                        throw new PersistenceException("Cannot confirm workspace container cleanup; execution stopped", null);
+                        throw new PersistenceException(cleanupFailureMessage(cleanup), null);
                     }
                 } catch (InterruptedException failure) { uncertainMutation = true; Thread.currentThread().interrupt(); throw new PersistenceException("Workspace cleanup interrupted", failure); }
                 catch (IOException failure) { uncertainMutation = true; throw new PersistenceException("Workspace cleanup failed", failure); }
@@ -169,6 +169,20 @@ public final class DockerWorkspace implements WorkspaceAccess {
             deleteTree(exchangeParent);
         }
     }
+    /** Cleanup errors must not mask a recognizable Docker access failure or copy raw daemon output. */
+    private static String cleanupFailureMessage(CommandResult cleanup) {
+        if (cleanup.isTimedOut()) return "Workspace container cleanup timed out; execution stopped";
+        String output = cleanup.getOutput() == null ? "" : cleanup.getOutput().toLowerCase(java.util.Locale.ROOT);
+        if (output.contains("permission denied")) {
+            return "Cannot access Docker daemon: permission denied. Refresh Docker group membership with newgrp docker"
+                    + " (or log in again), then check docker ps; execution stopped";
+        }
+        if (output.contains("cannot connect to the docker daemon") || output.contains("is the docker daemon running")) {
+            return "Cannot connect to Docker daemon. Start Docker and check docker ps; execution stopped";
+        }
+        return "Cannot confirm workspace container cleanup; exitCode=" + cleanup.getExitCode() + "; execution stopped";
+    }
+
     private List<String> command(Path exchange, String name, boolean mutation) {
         return List.of("docker", "run", "--rm", "--pull=never", "--name", name,
                 "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",

@@ -180,10 +180,11 @@ class ContextComparisonTest {
                 var workspace = workspace();
                 var restored = store.restore(id, workspace, 40);
                 current.set(restored);
-                assertTrue(restored.history().stream().anyMatch(item -> item.archivedBody() != null));
+                assertTrue(restored.history().stream().allMatch(item -> item.archivedBody() == null)); // Short-history retention.
                 new AgentRuntime(measured, tools(restored, workspace, store), 40).resume(restored);
                 assertEquals(AgentSession.Status.COMPLETED, restored.status());
                 assertEquals(23, restored.history().size());
+                assertTrue(restored.history().stream().anyMatch(item -> item.archivedBody() != null));
                 assertTrue(Files.readString(root.resolve("Main.java")).contains("return 2;"));
                 assertEquals(1, restored.workspaceState().getRevision());
                 assertEquals(WorkspaceState.TestStatus.CURRENT_PASSED, restored.workspaceState().testStatus());

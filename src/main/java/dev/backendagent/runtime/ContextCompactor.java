@@ -50,7 +50,7 @@ public final class ContextCompactor {
                 }
             }
             if (input.isEmpty()) { start = end; continue; }
-            var candidate = new SummaryRequest(session.objective(), previous, from, end, outputLimit, input);
+            var candidate = new SummaryRequest(session.currentTask(), previous, from, end, outputLimit, input);
             if (encodedLength(candidate) > MAX_INPUT_CHARACTERS) { break; }
             best = candidate;
             start = end;

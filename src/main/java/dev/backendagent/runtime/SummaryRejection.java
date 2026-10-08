@@ -5,6 +5,7 @@ public final class SummaryRejection {
     public enum Stage { MODEL_SUMMARY, SUMMARY_VALIDATION, DEDUPLICATION, REQUEST_BUDGET }
 
     private final Stage stage;
+    private final dev.backendagent.model.ModelFailureDiagnostic modelDiagnostic;
     private final String reasonCode;
     private final String reason;
     private final String exceptionType;
@@ -15,6 +16,8 @@ public final class SummaryRejection {
     private SummaryRejection(Stage stage, String code, String reason, RuntimeException failure,
                              int call, int from, int to) {
         this.stage = stage;
+        this.modelDiagnostic = failure instanceof dev.backendagent.model.ModelCallFailure modelFailure
+                ? modelFailure.getDiagnostic() : null;
         this.reasonCode = code;
         this.reason = reason;
         this.exceptionType = failure.getClass().getSimpleName();
@@ -37,6 +40,7 @@ public final class SummaryRejection {
             case "Invalid context summary" -> "INVALID_SUMMARY";
             case "Summary exceeds character limit" -> "SUMMARY_TOO_LARGE";
             case "Summary does not cover complete batches" -> "INCOMPLETE_BATCH_COVERAGE";
+            case "Summary quotation has no original conversation message" -> "QUOTE_NOT_IN_MESSAGE";
             case "Summary quotation has no original observation" -> "QUOTE_NOT_IN_ORIGINAL";
             case "Summary source is outside the middle window" -> "SOURCE_OUTSIDE_WINDOW";
             case "Summary cannot promote stale evidence" -> "STALE_EVIDENCE";
@@ -60,7 +64,11 @@ public final class SummaryRejection {
         } else if (message.matches("Full request exceeds configured token estimate budget: estimatedTotal=[0-9]+, limit=[0-9]+; reduce input or adjust model.context-window-tokens to a supported value")) {
             code = "MODEL_REQUEST_BUDGET_EXCEEDED";
         }
+        if (failure instanceof dev.backendagent.model.ModelCallFailure modelFailure) {
+            code = "MODEL_" + modelFailure.getDiagnostic().getCode().name();
+        }
         return new SummaryRejection(stage, code, switch (code) {
+            case "QUOTE_NOT_IN_MESSAGE" -> "引用不是对应用户消息或回答中的连续原文";
             case "QUOTE_NOT_IN_ORIGINAL" -> "引用不是对应工具结果中的连续原文";
             case "QUOTE_NOT_IN_INPUT" -> "引用未出现在本次摘要输入或可沿用的旧摘要中";
             case "STALE_EVIDENCE" -> "摘要引用了已过期的证据";
@@ -77,6 +85,11 @@ public final class SummaryRejection {
             case "INCOMPLETE_BATCH_COVERAGE" -> "摘要覆盖范围未包含完整工具调用批次";
             case "SUMMARY_BUDGET_EXCEEDED" -> "摘要超过预留的上下文预算";
             case "REQUEST_BUDGET_CHECK_FAILED" -> "候选摘要的完整请求预算检查失败";
+            case "MODEL_OUTPUT_LIMIT" -> "摘要响应达到输出长度上限；需要调整输出预算或缩小输入";
+            case "MODEL_INVALID_TOOL_ARGUMENTS" -> "模型工具参数格式不符合定义";
+            case "MODEL_INVALID_JSON" -> "模型响应不是完整合法JSON";
+            case "MODEL_INVALID_ENVELOPE", "MODEL_EMPTY_ANSWER", "MODEL_RESPONSE_INTERRUPTED" -> "模型响应结构无效、为空或被中断";
+            case "MODEL_TRANSPORT" -> "模型请求网络传输失败";
             case "MODEL_TIMEOUT" -> "摘要模型请求超时";
             case "MODEL_INTERRUPTED" -> "摘要模型请求被中断";
             case "MODEL_HTTP_ERROR" -> "摘要模型返回HTTP错误；状态码可在模型调用指标中查看";
@@ -90,8 +103,10 @@ public final class SummaryRejection {
     public String detail() {
         return "Summary rejected; retaining previous state; stage=" + stage + ", reasonCode=" + reasonCode
                 + ", reason=" + reason + ", exceptionType=" + exceptionType + ", call=" + modelCallNumber
-                + ", fromIndex=" + fromIndex + ", toIndex=" + toIndex;
+                + ", fromIndex=" + fromIndex + ", toIndex=" + toIndex
+                + (modelDiagnostic == null ? "" : ", " + modelDiagnostic.detail());
     }
+    public dev.backendagent.model.ModelFailureDiagnostic getModelDiagnostic() { return modelDiagnostic; }
     public Stage getStage() { return stage; }
     public String getReasonCode() { return reasonCode; }
     public String getReason() { return reason; }

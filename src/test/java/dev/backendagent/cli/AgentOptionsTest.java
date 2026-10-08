@@ -6,6 +6,36 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentOptionsTest {
+    @Test void interactiveFlagNeedsWorkspaceButNotInitialTaskOrContinueMessage() {
+        var options = AgentOptions.parse(new String[]{"--interactive", "--workspace", "."});
+        assertTrue(options.isInteractive()); assertNull(options.getTask());
+        assertTrue(AgentOptions.parse(new String[]{"--workspace", ".", "--task", "first", "--interactive"}).isInteractive());
+        String id = java.util.UUID.randomUUID().toString();
+        assertNull(AgentOptions.parse(new String[]{"--interactive", "--workspace", ".", "--continue-session", id}).getMessage());
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{"--interactive"}));
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{"--interactive", "--workspace", ".", "--interactive"}));
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{"--interactive", "--workspace", ".", "--message", "new"}));
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{"--interactive", "--show-session", id}));
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{"--interactive", "--workspace", ".", "--task", "x".repeat(8001)}));
+    }
+
+    @Test
+    void failedResumeUsesSavedTurnAndExplicitRetryOption() {
+        String id = java.util.UUID.randomUUID().toString();
+        var options = AgentOptions.parse(new String[]{"--workspace", ".", "--resume-failed-session", id,
+                "--retry-incomplete-tool", "true", "--max-model-calls", "60"});
+        assertEquals(java.util.UUID.fromString(id), options.getResumeFailedSession());
+        assertTrue(options.isRetryIncompleteTool());
+        for (String conflict : new String[]{"--task", "--memory-from", "--resume-session", "--continue-session"}) {
+            assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{
+                    "--workspace", ".", "--resume-failed-session", id, conflict,
+                    conflict.equals("--task") ? "new task" : id}));
+        }
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{
+                "--workspace", ".", "--task", "inspect", "--retry-incomplete-tool", "true"}));
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{
+                "--workspace", ".", "--resume-failed-session", id, "--retry-incomplete-tool", "false"}));
+    }
     @Test
     void requiresUserWorkspaceAndTaskInsteadOfSelectingFixedDefaults() {
         assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[0]));
