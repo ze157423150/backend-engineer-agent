@@ -50,7 +50,8 @@ public final class ContextCompactor {
                 }
             }
             if (input.isEmpty()) { start = end; continue; }
-            var candidate = new SummaryRequest(session.currentTask(), previous, from, end, outputLimit, input);
+            var candidate = new SummaryRequest(session.currentTask(), previous, from, end, outputLimit, input,
+                    session::originalObservation);
             if (encodedLength(candidate) > MAX_INPUT_CHARACTERS) { break; }
             best = candidate;
             start = end;
@@ -79,7 +80,7 @@ public final class ContextCompactor {
                 null, raw.modelCallNumber(), raw.evidence());
     }
     private int encodedLength(SummaryRequest request) {
-        try { return json.writeValueAsString(request).length(); }
+        try { return json.writeValueAsString(request.referenceData()).length(); }
         catch (java.io.IOException failure) { throw new IllegalStateException("Cannot encode summary input", failure); }
     }
 

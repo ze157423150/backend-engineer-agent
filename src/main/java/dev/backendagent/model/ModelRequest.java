@@ -16,7 +16,21 @@ public record ModelRequest(String objective, List<ToolExchange> history,
                            Set<String> staleSummarySourceIds, WorkspaceState workspaceState,
                            List<dev.backendagent.history.HistoricalEvidence> historicalEvidence,
                            List<dev.backendagent.runtime.ConversationTurn> turns,
-                           dev.backendagent.runtime.ConversationSummary conversationSummary, int latestTurnId) {
+                           dev.backendagent.runtime.ConversationSummary conversationSummary, int latestTurnId,
+                           dev.backendagent.runtime.NoProgressReport noProgressReport) {
+    public ModelRequest(String objective, List<ToolExchange> history, List<ToolDefinition> tools, int remaining,
+            int omitted, long characters, List<MemoryFact> memory, ContextProjection projection, ContextSummary summary,
+            Set<String> stale, WorkspaceState state, List<dev.backendagent.history.HistoricalEvidence> evidence,
+            List<dev.backendagent.runtime.ConversationTurn> turns,
+            dev.backendagent.runtime.ConversationSummary dialogueSummary, int latestTurnId) {
+        this(objective, history, tools, remaining, omitted, characters, memory, projection, summary, stale,
+                state, evidence, turns, dialogueSummary, latestTurnId, null);
+    }
+    public ModelRequest withNoProgressReport(dev.backendagent.runtime.NoProgressReport report) {
+        return new ModelRequest(objective, history, availableTools, remainingModelCalls, omittedExchanges,
+                historyCharacters, workingMemory, contextProjection, contextSummary, staleSummarySourceIds,
+                workspaceState, historicalEvidence, turns, conversationSummary, latestTurnId, report);
+    }
     public ModelRequest(String objective,List<ToolExchange> history,List<ToolDefinition> tools,int remaining,
             int omitted,long characters,List<MemoryFact> memory,ContextProjection projection,ContextSummary summary,
             Set<String> stale,WorkspaceState state,List<dev.backendagent.history.HistoricalEvidence> evidence,

@@ -24,10 +24,19 @@ class HistoryUnloadingTest {
     private ToolCall read(String id) {
         return new ToolCall(id, "read_file", Map.of("path", "Main.java", "start_line", "1", "end_line", "10"));
     }
+    private void prepareDistinctArchiveSources() throws Exception {
+        Files.writeString(root.resolve("Main.java"), body());
+        for (int i = 1; i < 13; i++) Files.writeString(root.resolve("Copy" + i + ".java"), body());
+    }
+    private ToolCall archiveRead(String id, int index) {
+        // Independent source files keep archive stress separate from repeat-loop detection.
+        return new ToolCall(id, "read_file", Map.of("path", index == 0 ? "Main.java" : "Copy" + index + ".java",
+                "start_line", "1", "end_line", "10"));
+    }
 
     @Test
     void unloadsOldBodiesAndVerifiesHiddenMemoryAndSummaryQuotesAcrossResume() throws Exception {
-        Files.writeString(root.resolve("Main.java"), body());
+        prepareDistinctArchiveSources();
         UUID id;
         try (var store = new FileSessionStore(data())) {
             var workspace = workspace();
@@ -37,7 +46,7 @@ class HistoryUnloadingTest {
             var turns = new AtomicInteger();
             new AgentRuntime(request -> {
                 int turn = turns.getAndIncrement();
-                if (turn < 13) { return ModelResponse.callTool(read("read-" + turn)); }
+                if (turn < 13) { return ModelResponse.callTool(archiveRead("read-" + turn, turn)); }
                 var old = session.history().getFirst();
                 assertNotNull(old.archivedBody());
                 assertFalse(old.result().content().contains(QUOTE));
@@ -105,13 +114,16 @@ class HistoryUnloadingTest {
     }
 
     private UUID archivedStop() throws Exception {
-        Files.writeString(root.resolve("Main.java"), body());
+        prepareDistinctArchiveSources();
         try (var store = new FileSessionStore(data())) {
             store.bindWorkspace(workspace());
             var session = new AgentSession("checkpoint", store);
             store.create(session);
             var turns = new AtomicInteger();
-            new AgentRuntime(request -> ModelResponse.callTool(read("read-" + turns.getAndIncrement())),
+            new AgentRuntime(request -> {
+                int index = turns.getAndIncrement();
+                return ModelResponse.callTool(archiveRead("read-" + index, index));
+            },
                     List.of(new ReadFileTool(workspace())), 13).run(session);
             store.saveSnapshot(session);
             return session.id();
@@ -146,9 +158,13 @@ class HistoryUnloadingTest {
             var session = new AgentSession("mixed results", store);
             store.create(session);
             var turns = new AtomicInteger();
+            var observations = new AtomicInteger();
             Tool small = new Tool() {
                 public String name() { return "small"; }
-                public ToolResult execute(Map<String, String> args) { return new ToolResult(true, "done"); }
+                public ToolResult execute(Map<String, String> args) {
+                    int number = observations.incrementAndGet();
+                    return new ToolResult(true, number == 13 ? "done" : "observation " + number);
+                }
             };
             new AgentRuntime(request -> {
                 int turn = turns.getAndIncrement();

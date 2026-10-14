@@ -52,6 +52,8 @@ class SummaryRejectionTest {
         var payload = event.path("payload");
         assertEquals("SUMMARY_VALIDATION", payload.path("stage").asText());
         assertEquals("QUOTE_NOT_IN_ORIGINAL", payload.path("reasonCode").asText());
+        assertEquals(0, payload.path("noteIndex").asInt());
+        assertEquals("SOURCE_OR_QUOTE_MISMATCH", payload.path("issue").asText());
         assertEquals(1, payload.path("modelCallNumber").asInt());
         assertEquals(0, payload.path("fromIndex").asInt());
         assertEquals(4, payload.path("toIndex").asInt());
@@ -66,6 +68,15 @@ class SummaryRejectionTest {
         var payload = rejection(session).path("payload");
         assertEquals("MODEL_SUMMARY", payload.path("stage").asText());
         assertEquals("INVALID_JSON_SYNTAX", payload.path("reasonCode").asText());
+    }
+
+    @Test void oneBadNoteDoesNotInstallGoodNotesOrAdvanceCoverage() throws Exception {
+        var session = run(request -> List.of(
+                new SummaryNote(SummaryNote.Kind.PROGRESS, "valid observation", "read-0", "evidence 0"),
+                new SummaryNote(SummaryNote.Kind.PROGRESS, "bad observation", "read-1", "invented quote")));
+        assertNull(session.contextSummary());
+        assertEquals(1, rejection(session).path("payload").path("noteIndex").asInt());
+        assertEquals(8, session.history().size());
     }
 
     @Test void unknownFailureDoesNotPersistMessageOrCause() throws Exception {

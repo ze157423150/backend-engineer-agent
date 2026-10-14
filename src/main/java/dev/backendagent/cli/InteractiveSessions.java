@@ -196,7 +196,7 @@ public final class InteractiveSessions {
                 store.bindWorkspace(workspace);
                 var sandbox = new DockerSandboxExecutor(runner, options.getSandboxImage(), Duration.ofSeconds(options.getTestTimeoutSeconds()));
                 var archive = store.observationArchive(session);
-                var tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace),
+                var tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace), new dev.backendagent.tools.IntegerCalculateTool(),
                         new ReadObservationTool(session, workspace, archive), new SearchHistoryTool(new dev.backendagent.history.HistoryArchiveReader(archive, workspace)),
                         new SearchCodeTool(workspace), new SearchTurnsTool(session), new ReadTurnTool(session), new RememberFactTool(session),
                         new ApplyPatchTool(workspace, session), new CreateFileTool(workspace, session), new WorkspaceDiffTool(workspace), new RunTestsTool(workspace, sandbox));

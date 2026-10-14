@@ -143,7 +143,7 @@ public final class RealModelEvaluation {
                             var summaryInputs = new ArrayList<com.fasterxml.jackson.databind.node.ObjectNode>();
                             var model = evaluationModel(client, session, mode, pairedRequests, summaryInputs);
                             var archive = store.observationArchive(session);
-                            var tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace), new SearchCodeTool(workspace),
+                            var tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace), new dev.backendagent.tools.IntegerCalculateTool(), new SearchCodeTool(workspace),
                                     new ApplyPatchTool(workspace, session), new CreateFileTool(workspace, session), new WorkspaceDiffTool(workspace),
                                     new RememberFactTool(session), new ReadObservationTool(session, workspace, archive),
                                     new SearchHistoryTool(new HistoryArchiveReader(archive, workspace)), new RunTestsTool(workspace, executor));

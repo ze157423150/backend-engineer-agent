@@ -37,9 +37,9 @@ public final class ContextAssembler {
         if (summaryCost >= budget.getMaxHistoryCharacters()) {
             throw new IllegalStateException("Summary exceeds history budget; increase --max-history-chars");
         }
-        int version = 4;
+        int version = 5;
         var projection = new ContextAssembler(new ContextBudget(budget.getMaxHistoryCharacters() - summaryCost))
-                .project(session.history(), version);
+                .project(session.history(), version, summary == null ? 0 : summary.getCoveredExchanges());
         // A retained original does not need its summary note repeated in the same request.
         if (visibleSummary != null) {
             var retainedIds = projection.getHistory().stream().map(exchange -> exchange.call().id())
@@ -58,7 +58,8 @@ public final class ContextAssembler {
                         projection.getOmittedExchanges(),session.history().size()).stream().map(turn ->
                     new ConversationTurn(turn.getTurnId(), turn.getUserMessage(),
                             turn.getStatus() == AgentSession.Status.COMPLETED ? AgentSession.Status.COMPLETED : AgentSession.Status.RUNNING,
-                            turn.getAnswer(), turn.getStartHistoryIndex(), turn.getEndHistoryIndex())).toList(),visibleDialogue,session.turns().size());
+                            turn.getAnswer(), turn.getStartHistoryIndex(), turn.getEndHistoryIndex())).toList(),visibleDialogue,session.turns().size())
+                .withNoProgressReport(session.noProgressReport());
     }
 
     ContextProjection project(List<dev.backendagent.model.ToolExchange> raw) {
@@ -70,6 +71,11 @@ public final class ContextAssembler {
     }
 
     ContextProjection project(List<dev.backendagent.model.ToolExchange> raw, int policyVersion) {
+        return project(raw, policyVersion, 0);
+    }
+
+    ContextProjection project(List<dev.backendagent.model.ToolExchange> raw, int policyVersion,
+                              int summaryCoveredExchanges) {
         boolean filterStale = policyVersion >= 2;
         var baseline = filterStale ? StaleObservationFilter.filter(raw) : raw;
         var history = new java.util.ArrayList<>(baseline);
@@ -97,6 +103,13 @@ public final class ContextAssembler {
                 && total <= budget.getMaxHistoryCharacters();
         int windowStart = policyVersion >= 3 && !retainShortHistory
                 ? ContextWindowPolicy.suffixStart(raw, ContextWindowPolicy.RECENT_BATCHES) : 0;
+        if (policyVersion >= 5 && !retainShortHistory) {
+            int oldest = ContextWindowPolicy.suffixStart(raw,
+                    ContextWindowPolicy.RECENT_BATCHES + ContextWindowPolicy.SUMMARY_BATCHES);
+            // Waiting, rejected and deliberately short inputs remain raw candidates. Only an
+            // accepted summary's coverage frontier may replace them with the recent suffix.
+            windowStart = Math.max(oldest, Math.min(summaryCoveredExchanges, windowStart));
+        }
         while (selectedStart > windowStart) {
             int batchEnd = selectedStart;
             int batchStart = batchEnd - 1;
@@ -131,6 +144,10 @@ public final class ContextAssembler {
             if (selectedCharacters + notice.length() <= budget.getMaxHistoryCharacters()) { references.append(notice); }
         }
         var staleIds = policyVersion >= 4 ? StaleObservationFilter.staleIds(raw) : java.util.Set.<String>of();
+        if (policyVersion >= 5) {
+            appendUnsummarizedReferences(raw, summaryCoveredExchanges, selectedStart, staleIds,
+                    references, selectedCharacters);
+        }
         for (int i = referenceStart; i < selectedStart; i++) {
             var call = raw.get(i).call();
             String line = "call_id=" + call.id() + ", tool=" + call.name() + "\n";
@@ -157,7 +174,39 @@ public final class ContextAssembler {
         }
         return new ContextProjection(policyVersion, raw.size(), budget.getMaxHistoryCharacters(), selectedStart,
                 selectedCharacters + references.length(), compressed, references.toString(),
-                history.subList(selectedStart, history.size()), filtered);
+                history.subList(selectedStart, history.size()), filtered, summaryCoveredExchanges);
+    }
+
+    private void appendUnsummarizedReferences(List<dev.backendagent.model.ToolExchange> raw, int covered,
+            int selectedStart, java.util.Set<String> stale, StringBuilder references, long selectedCharacters) {
+        long count = raw.subList(Math.min(covered, selectedStart), selectedStart).stream()
+                .filter(exchange -> !stale.contains(exchange.call().id())).count();
+        if (count == 0) { return; }
+        appendReference(references, selectedCharacters, "UNSUMMARIZED_OMITTED count=" + count
+                + "；这些记录尚未由成功摘要处理，不得推断操作未发生。以下仅程序生成操作索引，非模型摘要；"
+                + "缺少原文请search_history/read_observation。\n");
+        // Successful writes deserve an entry before routine observations; no source body is
+        // invented or re-promoted here. Full arguments/results remain in the durable archive.
+        for (boolean writes : new boolean[] {true, false}) {
+            for (int i = selectedStart - 1; i >= covered; i--) {
+                var exchange = raw.get(i);
+                if (stale.contains(exchange.call().id()) || WorkspaceState.isSuccessfulWrite(exchange) != writes) {
+                    continue;
+                }
+                String path = exchange.call().arguments().get("path");
+                appendReference(references, selectedCharacters, "summaryState=NOT_SUMMARIZED, call_id="
+                        + exchange.call().id() + ", tool=" + exchange.call().name()
+                        + (path == null ? "" : ", path=\"" + cataloguePath(path) + "\"")
+                        + ", successful=" + exchange.result().successful() + "\n");
+            }
+        }
+    }
+
+    private void appendReference(StringBuilder references, long selectedCharacters, String line) {
+        if (references.length() + line.length() <= 2000
+                && selectedCharacters + references.length() + line.length() <= budget.getMaxHistoryCharacters()) {
+            references.append(line);
+        }
     }
     /** Only the path is catalogued; arbitrary tool arguments and result bodies stay out. */
     private static String cataloguePath(String path) {

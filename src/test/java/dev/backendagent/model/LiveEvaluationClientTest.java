@@ -73,7 +73,8 @@ class LiveEvaluationClientTest {
             var turns = new AtomicInteger();
             Tool tool = new Tool() {
                 public String name() { return "read_file"; }
-                public ToolResult execute(Map<String, String> args) { return new ToolResult(true, "x".repeat(14000)); }
+                // Five originals exceed the request budget; four recent bodies leave room for 4096 output tokens.
+                public ToolResult execute(Map<String, String> args) { return new ToolResult(true, "x".repeat(13000)); }
             };
             new AgentRuntime(request -> ModelResponse.callTool(new ToolCall("read-" + turns.getAndIncrement(), "read_file", Map.of())),
                     List.of(tool), 5).run(session);

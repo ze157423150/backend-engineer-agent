@@ -9,6 +9,17 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorkspaceCreateFileTest {
+    @Test void createsNestedParentsAndSynchronizesNewDirectorySafely() throws IOException {
+        var w=workspace();
+        assertTrue(w.createFile("src/test/java/fixture/NewTest.java", "class NewTest {}\n").successful());
+        assertTrue(w.createdFilePaths().contains("src/test/java/fixture/NewTest.java"));
+        var dest=new Workspace(Files.createDirectory(root.resolve("destination")),root.resolve("custom.properties"));
+        assertNull(dest.synchronizationText("src/test/java/fixture/NewTest.java"));
+        dest.synchronizationWrite("src/test/java/fixture/NewTest.java",null,"class NewTest {}\n");
+        assertEquals("class NewTest {}\n",dest.synchronizationText("src/test/java/fixture/NewTest.java"));
+        assertFalse(w.createFile("new/.hidden/Test.java","bad").successful());
+        assertFalse(Files.exists(root.resolve("new")));
+    }
     @TempDir Path root;
 
     @Test
@@ -39,7 +50,7 @@ class WorkspaceCreateFileTest {
     }
 
     @Test
-    void rejectsOutsideHiddenSecretSymlinkAndMissingParentPaths() throws IOException {
+    void rejectsOutsideHiddenSecretAndSymlinkPaths() throws IOException {
         Path repo = Files.createDirectory(root.resolve("repo"));
         Path config = repo.resolve("custom.properties");
         var workspace = new Workspace(repo, config);
@@ -47,7 +58,7 @@ class WorkspaceCreateFileTest {
         Files.createSymbolicLink(repo.resolve("Alias.java"), root.resolve("Missing.java"));
         for (String path : List.of("../Escape.java", root.resolve("Absolute.java").toString(),
                 ".hidden/New.java", "agent-local.properties", "custom.properties", "application-local.yml",
-                "linked/Escape.java", "Alias.java", "missing/New.java", "target/New.java", "New.png")) {
+                "linked/Escape.java", "Alias.java", "target/New.java", "New.png")) {
             assertFalse(workspace.createFile(path, "content").successful(), path);
         }
         assertFalse(Files.exists(root.resolve("Escape.java")));

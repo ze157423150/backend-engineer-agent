@@ -39,7 +39,8 @@ public final class ArchivedBody {
                 + "; 原文共 " + reference.lines + " 行；节选行号不能用于定位；用 read_observation 按原结果行号提取]\n"
                 + text.substring(text.length() - 600);
         return new ToolExchange(original.call(), new ToolResult(original.result().successful(), excerpt,
-                original.result().fileFingerprint()), original.assistantContent(), original.modelCallNumber(),
+                original.result().fileFingerprint(), original.result().historicalEvidence(),
+                original.result().readMetadata()==null?null:original.result().readMetadata().excerpt()), original.assistantContent(), original.modelCallNumber(),
                 original.evidence(), reference);
     }
 

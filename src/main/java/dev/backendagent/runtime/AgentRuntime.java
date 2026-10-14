@@ -95,12 +95,28 @@ public final class AgentRuntime {
         session.history().forEach(exchange -> seenCallIds.add(exchange.call().id()));
         boolean completeToolBatch = true;
         try {
+            var noProgress = NoProgressDetector.start(session);
+            session.setNoProgressReport(null);
             while (session.status() == RUNNING) {
                 if (session.pendingToolBatch() != null) {
                     completeToolBatch = false;
                     session.pendingToolBatch().getCalls().forEach(call -> seenCallIds.add(call.id()));
                     executePendingBatch(session);
                     completeToolBatch = true;
+                    var report = noProgress.observeCompletedHistory(session);
+                    session.setNoProgressReport(report.getWarningLevel() == 0 ? null : report);
+                    if (report.getConsecutiveBatches() == 4 || report.getConsecutiveBatches() == 8) {
+                        session.append(NO_PROGRESS_WARNING, "consecutiveBatches=" + report.getConsecutiveBatches()
+                                + ", warningLevel=" + report.getWarningLevel() + ", revision=" + report.getWorkspaceRevision(), report);
+                        progress.accept("连续" + report.getConsecutiveBatches() + "个工具批次没有新增信息，提醒模型重新决策。");
+                        session.checkpoint();
+                    }
+                    if (report.shouldStop()) {
+                        session.append(NO_PROGRESS_STOPPED, "consecutiveBatches=" + report.getConsecutiveBatches()
+                                + ", revision=" + report.getWorkspaceRevision() + ", patchFailures=" + report.getPatchFailures(), report);
+                        progress.accept("重复探索或同一文件补丁连续失败，已停止；已完成改动保留，可检查原因后显式恢复。");
+                        throw new NoProgressException();
+                    }
                     continue;
                 }
                 if (session.modelCalls() >= maxModelCalls) {

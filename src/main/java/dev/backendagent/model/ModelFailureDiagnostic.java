@@ -10,16 +10,23 @@ public final class ModelFailureDiagnostic {
     private final FinishReason finishReason;
     private final Integer httpStatus;
     private final boolean retryable;
+    private final OutputLimitDetails outputLimit;
     public ModelFailureDiagnostic(Code code, FinishReason finishReason, Integer httpStatus, boolean retryable) {
+        this(code, finishReason, httpStatus, retryable, null);
+    }
+    public ModelFailureDiagnostic(Code code, FinishReason finishReason, Integer httpStatus, boolean retryable,
+                                  OutputLimitDetails outputLimit) {
         this.code = java.util.Objects.requireNonNull(code);
         this.finishReason = java.util.Objects.requireNonNull(finishReason);
         this.httpStatus = httpStatus;
         this.retryable = retryable;
+        this.outputLimit = outputLimit;
     }
     public Code getCode() { return code; }
     public FinishReason getFinishReason() { return finishReason; }
     public Integer getHttpStatus() { return httpStatus; }
     public boolean isRetryable() { return retryable; }
+    public OutputLimitDetails getOutputLimit() { return outputLimit; }
     public String detail() {
         return "code=" + code + ", finishReason=" + finishReason + ", httpStatus=" + httpStatus
                 + ", retryable=" + retryable;

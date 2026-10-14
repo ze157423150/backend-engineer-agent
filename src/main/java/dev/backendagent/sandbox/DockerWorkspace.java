@@ -67,6 +67,10 @@ public final class DockerWorkspace implements WorkspaceAccess {
     public String rootPath() { return root.toString(); }
     public ToolResult listFiles(String path) { return tool("list_files", Map.of("path", path), false); }
     public ToolResult readFile(String path, String start, String end) { return tool("read_file", Map.of("path", path, "start_line", start, "end_line", end), false); }
+    public ToolResult readFile(String path, String start, String end, String format) {
+        return format == null ? readFile(path, start, end)
+                : tool("read_file", Map.of("path", path, "start_line", start, "end_line", end, "format", format), false);
+    }
     public dev.backendagent.model.FileFingerprint fileFingerprint(String path) throws IOException {
         return json.treeToValue(invoke("file_fingerprint", Map.of("path", path), false).path("result"),
                 ToolResult.class).fileFingerprint();
@@ -131,7 +135,7 @@ public final class DockerWorkspace implements WorkspaceAccess {
             }
             var result = json.treeToValue(response.path("result"), ToolResult.class);
             boolean needsFingerprint = result.successful()
-                    && (operation.equals("read_file") || operation.equals("file_fingerprint"));
+                    && (operation.equals("read_file") || operation.equals("file_fingerprint") || operation.equals("create_file"));
             if (needsFingerprint && (result.fileFingerprint() == null
                     || !Path.of(arguments.get("path")).normalize().toString().equals(result.fileFingerprint().getPath()))) {
                 throw new IOException("Missing or mismatched worker file fingerprint; rebuild sandbox image");

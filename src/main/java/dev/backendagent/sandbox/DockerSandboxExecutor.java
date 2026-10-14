@@ -40,8 +40,15 @@ public final class DockerSandboxExecutor {
             attempted = true;
             CommandResult execution = runner.run(command(snapshot, name), timeout);
             boolean passed = !execution.isTimedOut() && execution.getExitCode() == 0;
-            result = new ToolResult(passed, "status=" + (execution.isTimedOut() ? "TIMED_OUT" : passed ? "PASSED" : "FAILED")
+            var counts = java.util.regex.Pattern.compile("Tests run: (\\d+), Failures: \\d+, Errors: \\d+, Skipped: (\\d+)").matcher(execution.getOutput());
+            Long executed = null;
+            while (counts.find()) executed = Long.parseLong(counts.group(1)) - Long.parseLong(counts.group(2));
+            if (execution.getOutput().contains("No tests to run")) executed = 0L;
+            String testExecution = executed == null ? "UNKNOWN" : executed == 0 ? "NO_TESTS" : "EXECUTED";
+            boolean noTests = passed && executed != null && executed == 0;
+            result = new ToolResult(passed && !noTests, "status=" + (execution.isTimedOut() ? "TIMED_OUT" : noTests ? "NO_TESTS" : passed ? "PASSED" : "FAILED")
                     + "\nexitCode=" + execution.getExitCode() + "\ncommand=mvn -o -B -ntp test"
+                    + "\nmavenSucceeded=" + passed + "\ntestExecution=" + testExecution + "\ntestsExecuted=" + (executed == null ? "UNKNOWN" : executed)
                     + "\n测试对象为本轮源码快照；退出码 0 表示 Maven test 阶段成功，不保证存在测试或覆盖全部需求。\n"
                     + execution.getOutput());
         } catch (IOException failure) {

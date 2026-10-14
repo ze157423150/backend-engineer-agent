@@ -34,11 +34,12 @@ public final class ContextSummary {
                     && raw.get(coveredExchanges - 1).modelCallNumber() == raw.get(coveredExchanges).modelCallNumber())) {
             throw new IllegalArgumentException("Summary does not cover complete batches");
         }
-        for (var note : notes) {
+        for (int index = 0; index < notes.size(); index++) {
+            var note = notes.get(index);
             if (raw.subList(0, coveredExchanges).stream().noneMatch(exchange ->
                     exchange.call().id().equals(note.getSourceCallId())
                     && original.apply(exchange.call().id()).result().content().contains(note.getEvidenceQuote()))) {
-                throw new IllegalArgumentException("Summary quotation has no original observation");
+                throw new SummaryValidationFailure(index);
             }
         }
     }

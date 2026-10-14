@@ -19,6 +19,15 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DockerSandboxExecutorTest {
+    @Test void noTestsIsNotReportedAsTestsPassed() throws Exception {
+        Files.writeString(root.resolve("pom.xml"),"<project/>");
+        CommandRunner runner=(cmd,timeout)->new CommandResult(0,false,cmd.get(1).equals("rm")?"removed":"[INFO] No tests to run.\nBUILD SUCCESS");
+        var result=executor(runner).runTests(new Workspace(root,root.resolve("agent-local.properties")));
+        assertFalse(result.successful());
+        assertTrue(result.content().contains("status=NO_TESTS"));
+        assertTrue(result.content().contains("mavenSucceeded=true"));
+        assertTrue(result.content().contains("testsExecuted=0"));
+    }
     @TempDir Path root;
 
     @Test

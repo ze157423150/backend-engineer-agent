@@ -33,7 +33,9 @@ docker build -f sandbox/Dockerfile -t backend-agent-sandbox:local .
 cp agent-local.properties.example agent-local.properties
 ```
 
-在编辑器中填写 `model.api-key`。模型名称使用账号可用值；服务地址填根地址或 `/v1`，不要填完整 `/chat/completions`。共享预算默认输出2048 tokens；较大补丁出现 LENGTH 时，可以在本地配置中调为 `model.max-output-tokens=4096` 后恢复，完整输入预算检查仍会生效。
+在编辑器中填写 `model.api-key`。模型名称使用账号可用值；服务地址填根地址或 `/v1`，不要填完整 `/chat/completions`。共享预算默认输出4096 tokens；较大的代码或测试文件应逐个创建，大补丁应分次提交。出现 LENGTH 时，失败事件会记录正文长度、工具参数长度与完整性及遮蔽文本值的头尾结构片段；截断响应不会执行，完整输入预算检查仍会生效。
+
+文件读取默认带行号；准备精确补丁时，优先复用当前上下文中可见且文件指纹仍有效的读取片段或成功创建参数。缺少所需片段、记录已退出上下文或文件指纹过期时，模型使用 `read_file` 的 `format=raw`，仅取原始源码并保留缩进和换行。同一文件补丁失败3次会要求重新读取，第4次失败停止；成功写入该文件后清零。`create_file` 可安全创建缺失父目录，成功返回创建指纹，无需为首次补丁额外读取；补丁修改后仍需获取新的内容和指纹。`raw` 正文与 `readMetadata` 分开，总行数、实际范围和EOF标志用于定位；重复范围会被标记，仍返回源码。整数测试期望值可用 `integer_calculate` 核对（支持括号和整数四则运算/取余，不执行代码），公式正确性仍需依据契约判断。`run_tests` 会标明 `testExecution` 和 `testsExecuted`；`NO_TESTS` 表示构建成功但未执行测试，不能作为回归通过。
 
 ```bash
 java -jar target/backend-engineer-agent-1.0.0.jar --help
@@ -150,6 +152,9 @@ java -jar target/backend-engineer-agent-1.0.0.jar \
 查询不调用模型。不手工修改日志或 checkpoint，恢复会联合核验这些记录。`MODEL_CALL_STARTED` 是任务请求；摘要请求由相应COMPACTION事件标识，总modelCalls包含二者。
 
 ## 5. 预算停止与失败恢复
+
+连续重复观察也可能停止：4、8 个无新增信息的工具批次时会提醒，12 个批次时以 `NoProgressException` 停止。已完成改动保留。请检查任务要求和模型配置，再通过 `/resume` 或失败恢复命令显式继续；恢复保留已见观察并重新给予纠偏窗口，仍受原会话累计调用上限约束。这个停止不代表代码测试失败或任务完成。
+
 
 预算耗尽时继续原轮次，不追加用户消息：
 

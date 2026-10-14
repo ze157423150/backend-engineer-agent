@@ -32,6 +32,22 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DeepSeekModelClientTest {
+    @Test void rawFormatIsOptionalAndFlowsThroughProtocolToWorkspace() throws Exception {
+        responses.add(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":1,\"end_line\":20,\"format\":\"raw\"}"));
+        responses.add(finalResponse("done"));
+        var session=new AgentSession("inspect raw");
+        new AgentRuntime(client(Duration.ofSeconds(5)),List.of(readTool),3).run(session);
+        assertEquals(AgentSession.Status.COMPLETED,session.status());
+        assertEquals(Files.readString(repository.resolve("OrderService.java")),session.history().getFirst().result().content());
+        var schema=requests.getFirst().path("tools").get(0).path("function").path("parameters");
+        assertTrue(schema.path("properties").has("format"));
+        assertFalse(schema.path("required").toString().contains("format"));
+        var toolMessage=java.util.stream.StreamSupport.stream(requests.get(1).path("messages").spliterator(),false)
+                .filter(m->m.path("role").asText().equals("tool")).findFirst().orElseThrow();
+        var returned=json.readTree(toolMessage.path("content").asText());
+        assertTrue(returned.path("readMetadata").path("reachedEndOfFile").asBoolean());
+        assertEquals(1,returned.path("readMetadata").path("totalLines").asInt());
+    }
     private final ObjectMapper json = new ObjectMapper();
     private final ConcurrentLinkedQueue<String> responses = new ConcurrentLinkedQueue<>();
     private final List<JsonNode> requests = new CopyOnWriteArrayList<>();
@@ -159,6 +175,51 @@ class DeepSeekModelClientTest {
         assertTrue(session.events().stream().anyMatch(e -> e.detail().contains("finishReason=OTHER")));
         assertFalse(session.events().toString().contains("test-key"));
         assertFalse(session.events().toString().contains("private content"));
+    }
+
+    @Test
+    void truncatedArgumentsHaveBoundedRedactedDiagnostics() throws Exception {
+        String partial = "{\"path\":\"test-key-private.java\",\"content\":\"" + "private-value".repeat(100);
+        var root = (ObjectNode) json.readTree(toolResponse(partial));
+        ((ObjectNode) root.path("choices").get(0)).put("finish_reason", "length");
+        responses.add(root.toString());
+        var request = new ModelRequest("inspect", List.of(), List.of(readTool.definition()), 1);
+        var failure = assertThrows(ModelCallFailure.class, () -> client(Duration.ofSeconds(5)).execute(request));
+        var detail = failure.getDiagnostic().getOutputLimit();
+        assertEquals(4096, detail.getMaxOutputTokens());
+        assertEquals(1, detail.getToolCallCount());
+        var tool = detail.getTools().getFirst();
+        assertEquals("read_file", tool.getName());
+        assertEquals(partial.length(), tool.getArgumentCharacters());
+        assertFalse(tool.isArgumentsValidJson());
+        assertTrue(tool.getHeadShape().length() <= 96);
+        assertTrue(tool.getTailShape().length() <= 96);
+        String stored = json.writeValueAsString(failure.getDiagnostic());
+        assertFalse(stored.contains("test-key"));
+        assertFalse(stored.contains("private-value"));
+        assertEquals(1, requests.size());
+    }
+
+    @Test
+    void textTruncationIsDistinguishedFromToolArguments() throws Exception {
+        var root = (ObjectNode) json.readTree(finalResponse("partial private answer"));
+        ((ObjectNode) root.path("choices").get(0)).put("finish_reason", "length");
+        responses.add(root.toString());
+        var request = new ModelRequest("inspect", List.of(), List.of(readTool.definition()), 1);
+        var failure = assertThrows(ModelCallFailure.class, () -> client(Duration.ofSeconds(5)).execute(request));
+        var detail = failure.getDiagnostic().getOutputLimit();
+        assertEquals(22, detail.getContentCharacters());
+        assertEquals(0, detail.getToolCallCount());
+        assertTrue(detail.getTools().isEmpty());
+        assertFalse(json.writeValueAsString(failure.getDiagnostic()).contains("private answer"));
+    }
+
+    @Test
+    void requestsReserveLargerOutputAndAskForSmallerWrites() throws Exception {
+        responses.add(finalResponse("done"));
+        client(Duration.ofSeconds(5)).execute(new ModelRequest("inspect", List.of(), List.of(readTool.definition()), 1));
+        assertEquals(4096, requests.getFirst().path("max_tokens").asInt());
+        assertTrue(requests.getFirst().path("messages").get(0).path("content").asText().contains("一次只创建一个文件"));
     }
 
     @Test
@@ -557,9 +618,10 @@ class DeepSeekModelClientTest {
     @Test
     void sendsToolFreeJsonSummaryRequestAndParsesReferencedNotes() throws Exception {
         responses.add(finalResponse("{\"notes\":[{\"kind\":\"PROGRESS\",\"statement\":\"Main exists\","
-                + "\"sourceCallId\":\"old\",\"evidenceQuote\":\"class Main {}\"}]}"));
+                + "\"evidenceId\":\"E1\"}]}"));
         var result = client(Duration.ofSeconds(5)).summarize(summaryRequest());
         assertEquals("old", result.getFirst().getSourceCallId());
+        assertEquals("class Main {}", result.getFirst().getEvidenceQuote());
         var body = requests.getFirst();
         assertFalse(body.has("tools"));
         assertFalse(body.has("tool_choice"));
@@ -567,13 +629,77 @@ class DeepSeekModelClientTest {
         assertEquals("disabled", body.path("thinking").path("type").asText());
         assertEquals(2, body.path("messages").size());
         var input = json.readTree(body.path("messages").get(1).path("content").asText());
-        assertEquals("class Main {}", input.path("observations").get(0).path("result").path("content").asText());
+        assertEquals("class Main {}", input.path("evidence").get(0).path("evidenceQuote").asText());
+        assertFalse(input.path("observations").get(0).has("result"));
+    }
+
+    @Test
+    void progressWarningIsSystemControlAndIncludedInRequestBudget() throws Exception {
+        var plain = new ModelRequest("fix source", List.of(), List.of(), 20);
+        var warned = plain.withNoProgressReport(new dev.backendagent.runtime.NoProgressReport(8, 0));
+        var body = client(Duration.ofSeconds(5)).buildRequest(warned);
+        String system = body.path("messages").get(0).path("content").asText();
+        assertTrue(system.contains("连续8个完整工具批次"));
+        assertTrue(system.contains("不得为了通过检测"));
+        assertTrue(client(Duration.ofSeconds(5)).inspectRequest(warned).getRequestBytes()
+                > client(Duration.ofSeconds(5)).inspectRequest(plain).getRequestBytes());
+        assertFalse(client(Duration.ofSeconds(5)).buildSummaryRequest(summaryRequest()).toString().contains("连续8个完整工具批次"));
+    }
+
+    @Test
+    void unknownEvidenceRejectsWholeResponseAndReportsOnlySafePosition() {
+        responses.add(finalResponse("{\"notes\":[{\"kind\":\"PROGRESS\",\"statement\":\"valid\",\"evidenceId\":\"E1\"},"
+                + "{\"kind\":\"PROGRESS\",\"statement\":\"sensitive\",\"evidenceId\":\"Bearer secret-key\"}]}"));
+        var failure = assertThrows(SummaryOutputFailure.class,
+                () -> client(Duration.ofSeconds(5)).summarize(summaryRequest()));
+        assertEquals(1, failure.getNoteIndex());
+        var diagnostic = dev.backendagent.runtime.SummaryRejection.from(
+                dev.backendagent.runtime.SummaryRejection.Stage.MODEL_SUMMARY, failure, 1, 0, 1);
+        assertEquals("UNKNOWN_EVIDENCE_ID", diagnostic.getReasonCode());
+        assertEquals("UNKNOWN_EVIDENCE_ID", diagnostic.getIssue());
+        assertFalse(diagnostic.detail().contains("secret-key"));
+        assertFalse(diagnostic.detail().contains("sensitive"));
+    }
+
+    @Test
+    void excessiveNotesReportCountWithoutRecordingTheirContent() {
+        String note = "{\"kind\":\"PROGRESS\",\"statement\":\"secret\",\"evidenceId\":\"E1\"}";
+        responses.add(finalResponse("{\"notes\":[" + String.join(",", java.util.Collections.nCopies(9, note)) + "]}"));
+        var failure = assertThrows(SummaryOutputFailure.class,
+                () -> client(Duration.ofSeconds(5)).summarize(summaryRequest()));
+        assertEquals("NOTE_COUNT", failure.getIssue());
+        assertEquals(9, failure.getActualCount());
+        assertFalse(failure.getMessage().contains("secret"));
+    }
+
+    @Test
+    void rejectsDuplicateFieldsInsteadOfSilentlySelectingLastEvidenceId() {
+        responses.add(finalResponse("{\"notes\":[{\"kind\":\"PROGRESS\",\"statement\":\"fact\","
+                + "\"evidenceId\":\"E999\",\"evidenceId\":\"E1\"}]}"));
+        var failure = assertThrows(SummaryOutputFailure.class,
+                () -> client(Duration.ofSeconds(5)).summarize(summaryRequest()));
+        assertEquals("JSON_SYNTAX", failure.getIssue());
+    }
+
+    @Test
+    void priorSummaryEvidenceCanBeSelectedWithoutRewritingOriginalQuotation() throws Exception {
+        var observation = summaryRequest().getObservations().getFirst();
+        var previous = new dev.backendagent.runtime.ContextSummary(1, 1, List.of(
+                new dev.backendagent.runtime.SummaryNote(dev.backendagent.runtime.SummaryNote.Kind.PROGRESS,
+                        "earlier fact", "prior-call", "exact old quotation")));
+        var request = new SummaryRequest("inspect", previous, 1, 2, 2000, List.of(observation));
+        responses.add(finalResponse("{\"notes\":[{\"kind\":\"PROGRESS\",\"statement\":\"retained fact\",\"evidenceId\":\"E1\"}]}"));
+        var notes = client(Duration.ofSeconds(5)).summarize(request);
+        assertEquals("prior-call", notes.getFirst().getSourceCallId());
+        assertEquals("exact old quotation", notes.getFirst().getEvidenceQuote());
+        var reference = json.readTree(requests.getLast().path("messages").get(1).path("content").asText());
+        assertEquals("E1", reference.path("previousSummary").get(0).path("evidenceId").asText());
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"not json", "{}", "{\"notes\":[]}",
-            "{\"notes\":[{\"kind\":\"PROGRESS\",\"statement\":\"done\",\"sourceCallId\":\"old\",\"evidenceQuote\":\"class\",\"extra\":\"bad\"}]}",
-            "{\"notes\":[{\"kind\":\"WRONG\",\"statement\":\"done\",\"sourceCallId\":\"old\",\"evidenceQuote\":\"class\"}]}",
+            "{\"notes\":[{\"kind\":\"PROGRESS\",\"statement\":\"done\",\"evidenceId\":\"E1\",\"extra\":\"bad\"}]}",
+            "{\"notes\":[{\"kind\":\"WRONG\",\"statement\":\"done\",\"evidenceId\":\"E1\"}]}",
             "{\"notes\":[]} {\"notes\":[]}"})
     void rejectsMalformedOrUnexpectedSummaryJson(String content) {
         responses.add(finalResponse(content));
@@ -587,7 +713,7 @@ class DeepSeekModelClientTest {
                 () -> client(Duration.ofSeconds(5)).summarize(summaryRequest()));
         assertEquals("Invalid summary JSON syntax", syntax.getMessage());
         responses.add(finalResponse("{\"notes\":[{\"kind\":\"secret-kind\",\"statement\":\"done\","
-                + "\"sourceCallId\":\"old\",\"evidenceQuote\":\"class\"}]}"));
+                + "\"evidenceId\":\"E1\"}]}"));
         var kind = assertThrows(IllegalArgumentException.class,
                 () -> client(Duration.ofSeconds(5)).summarize(summaryRequest()));
         assertEquals("Invalid summary note kind", kind.getMessage());
@@ -596,7 +722,7 @@ class DeepSeekModelClientTest {
     @Test
     void rejectsNextStepInNewSummaryResponses() {
         responses.add(finalResponse("{\"notes\":[{\"kind\":\"NEXT_STEP\",\"statement\":\"Run tests next\","
-                + "\"sourceCallId\":\"old\",\"evidenceQuote\":\"class Main {}\"}]}"));
+                + "\"evidenceId\":\"E1\"}]}"));
         assertThrows(IllegalStateException.class, () -> client(Duration.ofSeconds(5)).summarize(summaryRequest()));
     }
 

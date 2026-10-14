@@ -12,6 +12,38 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Opt-in real container verification after building the local image. Never invokes a model API. */
 @EnabledIfSystemProperty(named = "docker.integration", matches = "true")
 class DockerSandboxIntegrationTest {
+    @Test void createdSourceCanBePatchedInContainerWithoutReadFile() throws Exception {
+        Path source=Files.createDirectory(root.resolve("source"));Path sessionDir=Files.createDirectory(root.resolve("session"));
+        var w=DockerWorkspace.create(new Workspace(source,source.resolve("agent-local.properties")),sessionDir,new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);
+        var s=new dev.backendagent.runtime.AgentSession("create and edit");var count=new java.util.concurrent.atomic.AtomicInteger();
+        new dev.backendagent.runtime.AgentRuntime(request->switch(count.getAndIncrement()){
+            case 0->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("c","create_file",java.util.Map.of("path","Main.java","content","class Main { int n=1; }\n")));
+            case 1->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("p","apply_patch",java.util.Map.of("path","Main.java","old_text","n=1","new_text","n=2")));
+            default->dev.backendagent.model.ModelResponse.finish("done");
+        },java.util.List.of(new dev.backendagent.tools.CreateFileTool(w,s),new dev.backendagent.tools.ApplyPatchTool(w,s)),3).run(s);
+        assertTrue(s.history().getLast().result().successful());
+        assertTrue(s.history().stream().noneMatch(e->e.call().name().equals("read_file")));
+        assertTrue(Files.readString(sessionDir.resolve("workspace/Main.java")).contains("n=2"));
+        assertFalse(Files.exists(source.resolve("Main.java")));
+    }
+    @Test void rawReadAndNestedCreationWorkInsideContainer() throws Exception {
+        Path source=Files.createDirectory(root.resolve("source"));
+        Files.writeString(source.resolve("Main.java"),"class Main {\r\n  int n = 1;\r\n}\r\n");
+        Path session=Files.createDirectory(root.resolve("session"));
+        var w=DockerWorkspace.create(new Workspace(source,source.resolve("agent-local.properties")),session,
+                new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);
+        var raw=w.readFile("Main.java","2","2","raw");
+        assertTrue(raw.successful(),raw.content());
+        assertEquals("  int n = 1;\r\n",raw.content());
+        assertEquals(3,raw.readMetadata().getTotalLines());
+        assertEquals(2,raw.readMetadata().getStartLine());
+        assertEquals(2,raw.readMetadata().getEndLine());
+        assertTrue(w.applyPatch("Main.java",raw.content(),"  int n = 2;\r\n").successful());
+        assertTrue(w.createFile("src/test/java/example/NewTest.java","class NewTest {}\n").successful());
+        assertTrue(w.readFile("src/test/java/example/NewTest.java","1","1","raw").content().contains("class NewTest"));
+        assertFalse(w.createFile(".hidden/Bad.java","bad").successful());
+        assertTrue(Files.readString(source.resolve("Main.java")).contains("n = 1"));
+    }
     @TempDir Path root;
 
     @Test

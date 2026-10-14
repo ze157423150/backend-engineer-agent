@@ -48,11 +48,15 @@ public final class WorkspaceWorker {
         };
         var actual = new java.util.HashSet<String>();
         args.fieldNames().forEachRemaining(actual::add);
+        if (operation.equals("read_file") && actual.contains("format")) {
+            actual.remove("format");
+        }
         if (!args.isObject() || !expected.equals(actual)) { throw new IllegalArgumentException("Unexpected arguments"); }
         ToolResult result = switch (operation) {
             case "ping" -> new ToolResult(true, "workspace-worker-v1");
             case "list_files" -> workspace.listFiles(text(args, "path"));
-            case "read_file" -> workspace.readFile(text(args, "path"), text(args, "start_line"), text(args, "end_line"));
+            case "read_file" -> workspace.readFile(text(args, "path"), text(args, "start_line"), text(args, "end_line"),
+                    args.has("format") ? text(args, "format") : null);
             case "file_fingerprint" -> new ToolResult(true, "file fingerprint", workspace.fileFingerprint(text(args, "path")));
             case "search_code" -> workspace.searchCode(text(args, "path"), text(args, "query"));
             case "apply_patch" -> workspace.applyPatch(text(args, "path"), text(args, "old_text"), text(args, "new_text"));

@@ -20,6 +20,21 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
 
 class FileSessionStoreTest {
+    @Test void creationSourceFingerprintSurvivesCompletedSessionRestore() throws Exception {
+        var workspace=new Workspace(root,root.resolve("agent-local.properties"),root.resolve("sessions"));
+        java.util.UUID id;
+        try(var store=new FileSessionStore(root.resolve("sessions"))){
+            var session=new AgentSession("create",store);store.create(session);store.bindWorkspace(workspace);var count=new AtomicInteger();
+            new AgentRuntime(request->count.getAndIncrement()==0?ModelResponse.callTool(new ToolCall("c","create_file",Map.of("path","Main.java","content","class Main {}\n"))):ModelResponse.finish("done"),
+                    List.of(new dev.backendagent.tools.CreateFileTool(workspace,session)),2).run(session);
+            store.saveSnapshot(session);id=session.id();
+        }
+        try(var store=new FileSessionStore(root.resolve("sessions"))){
+            var restored=store.openCompleted(id,workspace,4);
+            assertTrue(restored.hasCurrentPatchSource("Main.java","class Main",workspace));
+            assertNotNull(restored.history().getFirst().result().fileFingerprint());
+        }
+    }
     @TempDir Path root;
 
     @Test

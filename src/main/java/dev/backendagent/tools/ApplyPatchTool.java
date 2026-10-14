@@ -15,16 +15,16 @@ public final class ApplyPatchTool implements Tool {
 
     public String name() { return "apply_patch"; }
     public ToolDefinition definition() {
-        return new ToolDefinition(name(), "精确替换已有文本文件中的一处内容。必须先读取；旧文本只允许匹配一次。"
+        return new ToolDefinition(name(), "精确替换已有文本文件中的一处内容。使用当前上下文中仍有效的读取片段或成功创建参数，无需重复读取；旧文本只允许匹配一次。"
                 + "支持片段删除，不创建或删除文件，不执行命令。", Map.of(
-                "path", "工作区相对文件路径", "old_text", "原文件中逐字匹配的旧文本，不包含读取输出的行号，必须非空",
+                "path", "工作区相对文件路径", "old_text", "从有效raw读取或成功创建参数复制旧文本，逐字匹配并保留缩进换行；缺少该片段时重新read_file(format=raw)",
                 "new_text", "替换后的文本，可为空；新旧文本各最多 24000 字符"));
     }
 
     public ToolResult execute(Map<String, String> arguments) {
         if (session.status() != AgentSession.Status.WAITING_FOR_TOOL
-                || !session.hasCurrentRead(arguments.get("path"), workspace)) {
-            return new ToolResult(false, "补丁未应用：必须先成功读取该文件，且读取哈希须与当前内容一致；每次修改后需要重新读取才能再次修改");
+                || !session.hasCurrentPatchSource(arguments.get("path"), arguments.get("old_text"), workspace)) {
+            return new ToolResult(false, "补丁未应用：当前可见记录缺少该旧文本或指纹已过期；可复用有效读取/成功创建内容，否则先read_file(format=raw)。修改后的文件仍需取得新内容和指纹。");
         }
         ToolResult result = workspace.applyPatch(arguments.get("path"), arguments.get("old_text"), arguments.get("new_text"));
         if (result.successful()) {

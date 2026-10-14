@@ -152,7 +152,7 @@ class ContextCompactorTest {
         for (int i = 2; i <= 8; i++) raw.remember(exchange("other-" + i, i, "current"));
         assertNull(new ContextCompactor(new ContextBudget(7000)).plan(raw));
         var request = new ContextCompactor(new ContextBudget(7000)).plan(session);
-        assertTrue(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(request).length()
+        assertTrue(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(request.referenceData()).length()
                 <= ContextCompactor.MAX_INPUT_CHARACTERS);
         var split = new ContextSummary(1, 1, List.of(note("first", "evidence")));
         assertThrows(IllegalArgumentException.class, () -> split.validateAgainst(List.of(

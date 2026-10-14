@@ -21,7 +21,8 @@ public final class AgentSession {
         TOOL_CALL_REQUESTED, TOOL_EXECUTION_SUCCEEDED, TOOL_EXECUTION_FAILED, WORKING_MEMORY_UPDATED, FILE_EVIDENCE_INVALIDATED,
         WORKSPACE_REVISION_ADVANCED, TEST_RESULT_RECORDED,
         WORKING_MEMORY_LOADED, HISTORY_BODIES_ARCHIVED, HISTORICAL_EVIDENCE_UPDATED, WINDOW_SUMMARY_ATTEMPTED, WINDOW_SUMMARY_SKIPPED, SESSION_RESUMED, SESSION_COMPLETED, SESSION_FAILED, BUDGET_EXHAUSTED,
-        TOOL_BATCH_STARTED, TOOL_BATCH_PROGRESS, TOOL_BATCH_COMPLETED, TOOL_CALL_RETRY_AUTHORIZED, TOOL_EXECUTION_STARTED
+        TOOL_BATCH_STARTED, TOOL_BATCH_PROGRESS, TOOL_BATCH_COMPLETED, TOOL_CALL_RETRY_AUTHORIZED, TOOL_EXECUTION_STARTED,
+        NO_PROGRESS_WARNING, NO_PROGRESS_STOPPED
     }
 
     public record Event(long sequence, EventType type, String detail) {}
@@ -46,6 +47,7 @@ public final class AgentSession {
     private PendingToolBatch pendingToolBatch;
     private boolean inFlightRetryValidated;
     private WorkspaceState workspaceState = WorkspaceState.initial();
+    private NoProgressReport noProgressReport;
     private final SessionEventSink eventSink;
     private final dev.backendagent.history.ObservationArchive archive;
     public static final int RECENT_FULL_BATCHES = ContextWindowPolicy.RECENT_BATCHES + ContextWindowPolicy.SUMMARY_BATCHES;
@@ -322,6 +324,8 @@ public final class AgentSession {
     }
     public int memoryCharacters() { return workingMemory.characterCount(); }
     public WorkspaceState workspaceState() { return workspaceState; }
+    public NoProgressReport noProgressReport() { return noProgressReport; }
+    void setNoProgressReport(NoProgressReport report) { noProgressReport = report; }
 
     public void importVerifiedMemory(MemoryFact oldFact, ToolExchange verified, UUID sourceSessionId) {
         if (status != Status.CREATED || !verified.result().successful()
@@ -406,6 +410,43 @@ public final class AgentSession {
             }
         }
         return false;
+    }
+
+    /** Patch authorization uses only source fragments visible in the last model request/current batch. */
+    public boolean hasCurrentPatchSource(String relativePath,String oldText,dev.backendagent.tools.WorkspaceAccess workspace) {
+        if(relativePath==null||relativePath.isBlank()||oldText==null||oldText.isEmpty())return false;
+        try {
+            Path requested=Path.of(relativePath).normalize();
+            var visible=new java.util.ArrayList<ToolExchange>(contextProjection==null?history:contextProjection.getHistory());
+            if(contextProjection!=null&&pendingToolBatch!=null) {
+                for(int i=contextProjection.getSourceHistorySize();i<history.size();i++) {
+                    var entry=history.get(i);
+                    if(entry.modelCallNumber()==pendingToolBatch.getModelCallNumber())visible.add(entry);
+                }
+            }
+            dev.backendagent.model.FileFingerprint current=null;
+            for(int i=visible.size()-1;i>=0;i--) {
+                var entry=visible.get(i);var saved=entry.result().fileFingerprint();
+                if(!entry.result().successful()||saved==null||!Path.of(saved.getPath()).equals(requested))continue;
+                String source=null;
+                if(entry.call().name().equals("create_file"))source=entry.call().arguments().get("content");
+                else if(entry.call().name().equals("read_file")&&!staleEvidenceIds.contains(entry.call().id())) {
+                    source=entry.result().content();
+                    if(!"raw".equals(entry.call().arguments().get("format"))) {
+                        var text=new StringBuilder();
+                        for(String line:source.split("\\n",-1)) {
+                            if(line.matches("\\d+: .*"))text.append(line.substring(line.indexOf(": ")+2)).append('\n');
+                        }
+                        source=text.toString();
+                    }
+                }
+                if(source==null||!source.contains(oldText))continue;
+                if(current==null)current=workspace.fileFingerprint(relativePath);
+                if(saved.equals(current))return true;
+            }
+            return false;
+        } catch(dev.backendagent.persistence.PersistenceException fatal){throw fatal;}
+        catch(java.io.IOException|IllegalArgumentException unavailable){return false;}
     }
 
     void transitionTo(Status next) {

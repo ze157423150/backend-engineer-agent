@@ -159,7 +159,12 @@ public final class Workspace implements WorkspaceAccess {
     }
 
     public ToolResult readFile(String relativePath, String start, String end) {
+        return readFile(relativePath, start, end, "numbered");
+    }
+
+    public ToolResult readFile(String relativePath, String start, String end, String format) {
         try {
+            if (format != null && !format.equals("numbered") && !format.equals("raw")) return failure("format只允许numbered或raw");
             int startLine = Integer.parseInt(start);
             int endLine = Integer.parseInt(end);
             if (startLine < 1 || endLine < startLine || (long) endLine - startLine >= 200) {
@@ -174,10 +179,23 @@ public final class Workspace implements WorkspaceAccess {
             List<String> lines;
             var decoder = StandardCharsets.UTF_8.newDecoder();
             String text = decoder.decode(ByteBuffer.wrap(bytes)).toString();
+            if ("raw".equals(format)) {
+                var offsets = new java.util.ArrayList<Integer>();
+                if (!text.isEmpty()) offsets.add(0);
+                var separators = java.util.regex.Pattern.compile("\\r\\n|\\r|\\n").matcher(text);
+                while (separators.find()) if (separators.end() < text.length()) offsets.add(separators.end());
+                if (startLine > offsets.size()) return failure("起始行超出文件范围，raw未返回源码");
+                int last = Math.min(endLine, offsets.size());
+                String raw = text.substring(offsets.get(startLine - 1), last < offsets.size() ? offsets.get(last) : text.length());
+                if (raw.length() > MAX_OUTPUT_CHARS) return failure("raw范围超过输出限制，请缩小行范围；未返回不完整源码");
+                return new ToolResult(true, raw, fingerprint(file, bytes), null,
+                        new dev.backendagent.model.FileReadMetadata(offsets.size(),startLine,last,last==offsets.size(),true,false));
+            }
             try (var reader = new java.io.BufferedReader(new java.io.StringReader(text))) {
                 lines = reader.lines().toList();
             }
             StringBuilder output = new StringBuilder("file=" + relative(file) + ", totalLines=" + lines.size() + "\n");
+            int lastRead=0;
             for (int i = startLine - 1; i < Math.min(endLine, lines.size()); i++) {
                 String line = (i + 1) + ": " + lines.get(i) + "\n";
                 if (output.length() + line.length() > MAX_OUTPUT_CHARS) {
@@ -185,11 +203,14 @@ public final class Workspace implements WorkspaceAccess {
                     break;
                 }
                 output.append(line);
+                lastRead=i+1;
             }
             if (startLine > lines.size()) {
                 output.append("[起始行超出文件范围]\n");
             }
-            return new ToolResult(true, output.toString(), fingerprint(file, bytes));
+            return new ToolResult(true, output.toString(), fingerprint(file, bytes), null,
+                    lastRead==0?null:new dev.backendagent.model.FileReadMetadata(lines.size(),startLine,lastRead,
+                            lastRead==lines.size(),lastRead==Math.min(endLine,lines.size()),false));
         } catch (IOException | IllegalArgumentException failure) {
             return failure("文件不可读取，请检查工作区相对路径和行号；密钥文件、隐藏路径和符号链接禁止读取");
         }
@@ -315,8 +336,13 @@ public final class Workspace implements WorkspaceAccess {
             }
             String before = Files.readString(file);
             int position = before.indexOf(oldText);
-            if (position < 0 || before.indexOf(oldText, position + 1) >= 0) {
-                return failure("旧文本必须在文件中精确匹配一次，请重新读取并提供足够上下文；文件未修改");
+            if (position < 0) {
+                String hint = before.replaceAll("(?m)^[ \\t]+", "").contains(oldText.replaceAll("(?m)^[ \\t]+", ""))
+                        ? "疑似缩进不一致；" : "";
+                return failure("旧文本未找到；" + hint + "请read_file(format=raw)重新读取，原样保留空格和换行后重试；文件未修改");
+            }
+            if (before.indexOf(oldText, position + 1) >= 0) {
+                return failure("旧文本匹配多处，必须精确匹配一次；请read_file(format=raw)读取更完整上下文；文件未修改");
             }
             String after = before.substring(0, position) + newText + before.substring(position + oldText.length());
             byte[] bytes = after.getBytes(StandardCharsets.UTF_8);
@@ -361,10 +387,14 @@ public final class Workspace implements WorkspaceAccess {
             if (input.isAbsolute() || !candidate.startsWith(root) || candidate.equals(root)) {
                 return failure("只允许工作区内的相对文件路径");
             }
-            Path parent = resolve(relative(candidate.getParent()));
-            file = parent.resolve(candidate.getFileName());
-            if (!Files.isDirectory(parent) || !visible(file) || !textExtension(file)) {
-                return failure("父目录必须已存在，文件必须使用允许的文本扩展名；禁止密钥、隐藏路径和符号链接");
+            file = candidate;
+            Path checked = root;
+            for (Path component : root.relativize(file)) {
+                checked = checked.resolve(component);
+                if (!visible(checked)) return failure("创建路径受保护：禁止密钥、隐藏路径和符号链接");
+            }
+            if (!textExtension(file)) {
+                return failure("文件必须使用允许的文本扩展名");
             }
             if (originals.size() >= 32) {
                 return failure("本次运行最多创建或修改 32 个文件");
@@ -373,6 +403,7 @@ public final class Workspace implements WorkspaceAccess {
             if (bytes.length > MAX_FILE_BYTES) {
                 return failure("文件内容超过 256 KiB");
             }
+            createParentDirectories(file);
             try (var channel = Files.newByteChannel(file, StandardOpenOption.CREATE_NEW,
                     StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
                 created = true;
@@ -383,7 +414,8 @@ public final class Workspace implements WorkspaceAccess {
             originals.put(file, "");
             createdFiles.add(file);
             return new ToolResult(true, "file=" + relative(file)
-                    + "\n已创建新文件，未覆盖已有文件。请用 workspace_diff 检查并 read_file 确认；尚未编译或测试。");
+                    + "\n已创建新文件，未覆盖已有文件，指纹对应创建时写入的完整字节。创建参数中的源码可用于后续补丁；尚未编译或测试。",
+                    fingerprint(file, bytes));
         } catch (FileAlreadyExistsException exists) {
             return failure("文件已存在，未覆盖；修改已有文件请先读取并使用 apply_patch");
         } catch (IOException | IllegalArgumentException failure) {
@@ -409,11 +441,14 @@ public final class Workspace implements WorkspaceAccess {
         Path candidate = root.resolve(input).normalize();
         if (input.isAbsolute() || !candidate.startsWith(root) || candidate.equals(root)
                 || !input.normalize().equals(input)) throw new IOException("同步路径必须位于工作区内");
-        Path parent = resolve(relative(candidate.getParent()));
-        Path file = parent.resolve(candidate.getFileName());
-        if (!Files.isDirectory(parent) || !visible(file) || !textExtension(file))
-            throw new IOException("同步路径受保护或父目录不存在：" + path);
-        return file;
+        Path checked = root;
+        for (Path component : root.relativize(candidate)) {
+            checked = checked.resolve(component);
+            if (!visible(checked) || (!checked.equals(candidate) && Files.exists(checked, LinkOption.NOFOLLOW_LINKS)
+                    && !Files.isDirectory(checked, LinkOption.NOFOLLOW_LINKS))) throw new IOException("同步路径受保护：" + path);
+        }
+        if (!textExtension(candidate)) throw new IOException("同步文件类型受保护：" + path);
+        return candidate;
     }
 
     /** Compare again immediately before each write; existing files use an atomic replacement. */
@@ -426,6 +461,7 @@ public final class Workspace implements WorkspaceAccess {
         String actualHash = before == null ? null : dev.backendagent.history.ArchivedBody.hash(before);
         if (!java.util.Objects.equals(expectedHash, actualHash)) throw new IOException("原文件已改变，拒绝覆盖：" + path);
         if (before == null) {
+            createParentDirectories(file);
             try (var channel = Files.newByteChannel(file, StandardOpenOption.CREATE_NEW,
                     StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
                 var buffer = ByteBuffer.wrap(bytes);
@@ -446,6 +482,25 @@ public final class Workspace implements WorkspaceAccess {
                 throw new IOException("写回前原文件发生变化：" + path);
             Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally { Files.deleteIfExists(temporary); }
+    }
+
+    private void createParentDirectories(Path file) throws IOException {
+        Path parent = root;
+        for (Path component : root.relativize(file.getParent())) {
+            parent = parent.resolve(component);
+            if (!visible(parent)) throw new IOException("Blocked parent path");
+            if (!Files.exists(parent, LinkOption.NOFOLLOW_LINKS)) {
+                try {
+                    var inherited = Files.getFileStore(parent.getParent()).supportsFileAttributeView("posix")
+                            ? Files.getPosixFilePermissions(parent.getParent()) : null;
+                    Files.createDirectory(parent);
+                    if (inherited != null) Files.setPosixFilePermissions(parent, inherited);
+                }
+                catch (FileAlreadyExistsException raced) { /* Recheck below. */ }
+            }
+            if (!visible(parent) || !Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS))
+                throw new IOException("Parent must be a regular directory");
+        }
     }
 
     /** Snapshot comparison for files changed by this workspace; independent of Git repository state. */

@@ -70,7 +70,7 @@ public final class HistoryFreshnessEvaluation {
                     var workspace = DockerWorkspace.create(new Workspace(source, config, output.resolve("sessions")), store.sessionDirectory(session.id()), runner, image);
                     store.bindWorkspace(workspace);
                     var archive = store.observationArchive(session);
-                    List<Tool> tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace), new SearchCodeTool(workspace),
+                    List<Tool> tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace), new dev.backendagent.tools.IntegerCalculateTool(), new SearchCodeTool(workspace),
                             new ApplyPatchTool(workspace, session), new CreateFileTool(workspace, session),
                             new SearchHistoryTool(new HistoryArchiveReader(archive, workspace)), new ReadObservationTool(session, workspace, archive));
                     var setup = new ArrayList<ToolCall>();

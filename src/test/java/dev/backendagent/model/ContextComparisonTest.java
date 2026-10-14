@@ -83,21 +83,22 @@ class ContextComparisonTest {
                 var output = json.createObjectNode();
                 var notes = output.putArray("notes");
                 // One deliberate invalid response verifies fallback without changing the fixed task trace.
-                com.fasterxml.jackson.databind.JsonNode observation = null;
-                for (var candidate : input.path("observations")) {
-                    if (!candidate.path("result").path("content").asText().startsWith("[STALE_OBSERVATION_BODY_OMITTED]")) {
-                        observation = candidate;
-                        break;
+                com.fasterxml.jackson.databind.JsonNode evidence = null;
+                for (var candidate : input.path("evidence")) {
+                    boolean currentSource = false;
+                    for (var observation : input.path("observations")) {
+                        if (observation.path("call").path("id").asText().equals(candidate.path("sourceCallId").asText())) {
+                            currentSource = true;
+                            break;
+                        }
                     }
+                    if (currentSource) { evidence = candidate; break; }
                 }
                 summaryResponses.add(number == 2 ? "deliberately invalid empty notes"
-                        : observation == null ? "all input sources stale; no valid fixture note" : "fixed valid fixture note");
-                if (number != 2 && observation != null) {
-                    String content = observation.path("result").path("content").asText();
-                    String quote = content.lines().filter(line -> !line.isBlank()).findFirst().orElseThrow();
-                    quote = quote.substring(0, Math.min(80, quote.length()));
+                        : evidence == null ? "all input sources stale; no valid fixture note" : "fixed valid fixture note");
+                if (number != 2 && evidence != null) {
                     notes.addObject().put("kind", "PROGRESS").put("statement", "固定测试摘要，核验流程用")
-                            .put("sourceCallId", observation.path("call").path("id").asText()).put("evidenceQuote", quote);
+                            .put("evidenceId", evidence.path("evidenceId").asText());
                 }
                 message.put("content", json.writeValueAsString(output));
                 choice.put("finish_reason", "stop");
@@ -137,7 +138,8 @@ class ContextComparisonTest {
                     var originals = session.history().stream().map(item -> session.originalObservation(item.call().id())).toList();
                     var full = StaleObservationFilter.filter(originals);
                     var baseline = new ModelRequest(request.objective(), full, request.availableTools(), request.remainingModelCalls(),
-                            0, 0, request.workingMemory(), null, null, Set.of(), request.workspaceState());
+                            0, 0, request.workingMemory(), null, null, Set.of(), request.workspaceState())
+                            .withNoProgressReport(request.noProgressReport());
                     try {
                         String fullJson = json.writeValueAsString(client.buildRequest(baseline));
                         String layeredJson = json.writeValueAsString(client.buildRequest(request));

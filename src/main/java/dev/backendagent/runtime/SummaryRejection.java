@@ -12,6 +12,9 @@ public final class SummaryRejection {
     private final int modelCallNumber;
     private final int fromIndex;
     private final int toIndex;
+    private final String issue;
+    private final Integer noteIndex;
+    private final Integer actualCount;
 
     private SummaryRejection(Stage stage, String code, String reason, RuntimeException failure,
                              int call, int from, int to) {
@@ -24,6 +27,12 @@ public final class SummaryRejection {
         this.modelCallNumber = call;
         this.fromIndex = from;
         this.toIndex = to;
+        var outputFailure = failure instanceof dev.backendagent.model.SummaryOutputFailure diagnostic ? diagnostic : null;
+        this.issue = outputFailure != null ? outputFailure.getIssue()
+                : failure instanceof SummaryValidationFailure ? "SOURCE_OR_QUOTE_MISMATCH" : null;
+        this.noteIndex = outputFailure != null ? Integer.valueOf(outputFailure.getNoteIndex())
+                : failure instanceof SummaryValidationFailure validation ? Integer.valueOf(validation.getNoteIndex()) : null;
+        this.actualCount = outputFailure == null ? null : outputFailure.getActualCount();
     }
 
     public static SummaryRejection from(Stage stage, RuntimeException failure, int call, int from, int to) {
@@ -34,6 +43,7 @@ public final class SummaryRejection {
             case "Invalid summary note fields", "Model response is missing a required text field",
                  "Model response has an invalid text field" -> "INVALID_FIELDS";
             case "Invalid summary note kind" -> "INVALID_NOTE_KIND";
+            case "Unknown summary evidence id" -> "UNKNOWN_EVIDENCE_ID";
             case "Invalid summary note" -> "INVALID_NOTE_VALUES";
             case "New summaries cannot contain NEXT_STEP" -> "NEXT_STEP_FORBIDDEN";
             case "Summary response exceeds size limit" -> "RESPONSE_TOO_LARGE";
@@ -78,6 +88,7 @@ public final class SummaryRejection {
             case "INVALID_JSON_STRUCTURE" -> "摘要JSON结构或条目数量不符合要求";
             case "INVALID_FIELDS" -> "摘要或模型响应字段缺失或格式错误";
             case "INVALID_NOTE_KIND" -> "摘要条目类型不受支持";
+            case "UNKNOWN_EVIDENCE_ID" -> "摘要选择的证据编号不在本次输入中";
             case "INVALID_NOTE_VALUES" -> "摘要条目字段为空或超过长度限制";
             case "NEXT_STEP_FORBIDDEN" -> "摘要包含禁止的NEXT_STEP条目";
             case "RESPONSE_TOO_LARGE", "SUMMARY_TOO_LARGE" -> "摘要超过字符长度上限";
@@ -104,6 +115,7 @@ public final class SummaryRejection {
         return "Summary rejected; retaining previous state; stage=" + stage + ", reasonCode=" + reasonCode
                 + ", reason=" + reason + ", exceptionType=" + exceptionType + ", call=" + modelCallNumber
                 + ", fromIndex=" + fromIndex + ", toIndex=" + toIndex
+                + (issue == null ? "" : ", issue=" + issue + ", noteIndex=" + noteIndex + ", actualCount=" + actualCount)
                 + (modelDiagnostic == null ? "" : ", " + modelDiagnostic.detail());
     }
     public dev.backendagent.model.ModelFailureDiagnostic getModelDiagnostic() { return modelDiagnostic; }
@@ -114,4 +126,7 @@ public final class SummaryRejection {
     public int getModelCallNumber() { return modelCallNumber; }
     public int getFromIndex() { return fromIndex; }
     public int getToIndex() { return toIndex; }
+    public String getIssue() { return issue; }
+    public Integer getNoteIndex() { return noteIndex; }
+    public Integer getActualCount() { return actualCount; }
 }

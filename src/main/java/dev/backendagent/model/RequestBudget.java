@@ -3,7 +3,7 @@ package dev.backendagent.model;
 /** Estimates the exact outgoing UTF-8 JSON at one token per byte, plus a framing reserve. */
 public final class RequestBudget {
     public static final int DEFAULT_CONTEXT_WINDOW = 65536;
-    public static final int DEFAULT_OUTPUT_TOKENS = 2048;
+    public static final int DEFAULT_OUTPUT_TOKENS = 4096;
     public static final int DEFAULT_SAFETY_MARGIN = 1024;
     private final int contextWindowTokens;
     private final int outputTokens;
