@@ -77,6 +77,10 @@ public final class DockerWorkspace implements WorkspaceAccess {
     }
     public ToolResult searchCode(String path, String query) { return tool("search_code", Map.of("path", path, "query", query), false); }
     public ToolResult applyPatch(String path, String oldText, String newText) { return tool("apply_patch", Map.of("path", path, "old_text", oldText, "new_text", newText), true); }
+    public ToolResult applyPatchBatch(String path, String sha256, java.util.List<dev.backendagent.tools.PatchEdit> edits) {
+        try { return tool("apply_patch_batch", Map.of("path",path,"expected_sha256",sha256,"patches",json.writeValueAsString(edits)),true); }
+        catch (IOException invalid) { return new ToolResult(false,"PATCH_BATCH_INVALID: 无法编码补丁；本组未写入。"); }
+    }
     public ToolResult createFile(String path, String content) { return tool("create_file", Map.of("path", path, "content", content), true); }
     public ToolResult diff(String path) { return tool("workspace_diff", Map.of("path", path), false); }
     public Map<String, String> originalContents() { return originals; }

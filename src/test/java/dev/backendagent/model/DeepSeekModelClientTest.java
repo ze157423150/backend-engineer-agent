@@ -32,6 +32,27 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DeepSeekModelClientTest {
+    @Test void verificationEvidenceExpectationsAndRejectionReachTheRequest() throws Exception {
+        var state=new dev.backendagent.verification.VerificationState();
+        var basis=new dev.backendagent.verification.VerificationBasis("TAX",1,"read",new FileFingerprint("tax.md","1".repeat(64)),1,1,"tax=(base*rate+5000)/10000\n");
+        state.observe(new ToolExchange(new ToolCall("pin","pin_verification_basis",java.util.Map.of("basis_id","TAX")),
+                new ToolResult(true,dev.backendagent.verification.VerificationState.encode(basis))),1);
+        state.refresh(java.util.Map.of("tax.md","1".repeat(64)),java.util.Set.of());
+        var failure=dev.backendagent.verification.TestFailureReport.from("test",0,false,
+                "testExecution=EXECUTED\ntestsExecuted=1\n[ERROR] TaxTest.amount:12 expected: <180> but was: <1800>");
+        var view=new dev.backendagent.verification.VerificationContext(1,state,1,"test failed",failure);
+        var request=new ModelRequest("repair",List.of(),List.of(),2).withVerificationContext(view).withNoProgressReport(null);
+        JsonNode data=null;
+        for(var message:client(Duration.ofSeconds(5)).buildRequest(request).path("messages")){
+            if(!message.path("role").asText().equals("user"))continue;
+            var content=message.path("content").asText();if(!content.startsWith("{"))continue;
+            var block=json.readTree(content);if(block.path("kind").asText().equals("current_turn_verification"))data=block.path("data");
+        }
+        assertNotNull(data);assertEquals("CURRENT",data.path("bases").get(0).path("validity").asText());
+        assertFalse(data.has("expectations"));
+        assertEquals(1,data.path("completionRejections").asInt());
+        assertEquals("1800",data.path("latestTest").path("failures").get(0).path("actual").asText());
+    }
     @Test void rawFormatIsOptionalAndFlowsThroughProtocolToWorkspace() throws Exception {
         responses.add(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":1,\"end_line\":20,\"format\":\"raw\"}"));
         responses.add(finalResponse("done"));

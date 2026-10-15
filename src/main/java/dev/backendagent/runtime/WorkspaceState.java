@@ -36,7 +36,7 @@ public final class WorkspaceState {
     }
 
     public static boolean isSuccessfulWrite(ToolExchange exchange) {
-        return exchange.result().successful() && (exchange.call().name().equals("apply_patch")
+        return exchange.result().successful() && ((exchange.call().name().equals("apply_patch") || exchange.call().name().equals("apply_patch_batch"))
                 || exchange.call().name().equals("create_file"));
     }
 

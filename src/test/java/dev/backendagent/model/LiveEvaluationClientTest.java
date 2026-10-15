@@ -73,12 +73,12 @@ class LiveEvaluationClientTest {
             var turns = new AtomicInteger();
             Tool tool = new Tool() {
                 public String name() { return "read_file"; }
-                // Five originals exceed the request budget; four recent bodies leave room for 4096 output tokens.
+                // Full originals exceed the request budget; the explicitly bounded suffix leaves room for output.
                 public ToolResult execute(Map<String, String> args) { return new ToolResult(true, "x".repeat(13000)); }
             };
             new AgentRuntime(request -> ModelResponse.callTool(new ToolCall("read-" + turns.getAndIncrement(), "read_file", Map.of())),
                     List.of(tool), 5).run(session);
-            var request = new ContextAssembler().assemble(session, List.of(tool.definition()), 1);
+            var request = new ContextAssembler(new dev.backendagent.runtime.ContextBudget(50000)).assemble(session, List.of(tool.definition()), 1);
             var client = client(server, new ArrayList<>());
             var baseline = RealModelEvaluation.evaluationModel(client, session, "full-history");
             assertFalse(baseline.supportsSummarization());

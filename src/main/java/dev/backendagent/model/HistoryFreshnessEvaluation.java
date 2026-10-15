@@ -70,7 +70,7 @@ public final class HistoryFreshnessEvaluation {
                     var workspace = DockerWorkspace.create(new Workspace(source, config, output.resolve("sessions")), store.sessionDirectory(session.id()), runner, image);
                     store.bindWorkspace(workspace);
                     var archive = store.observationArchive(session);
-                    List<Tool> tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace), new dev.backendagent.tools.IntegerCalculateTool(), new SearchCodeTool(workspace),
+                    List<Tool> tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace), new dev.backendagent.tools.PinVerificationBasisTool(session, workspace), new dev.backendagent.tools.IntegerCalculateTool(), new SearchCodeTool(workspace),
                             new ApplyPatchTool(workspace, session), new CreateFileTool(workspace, session),
                             new SearchHistoryTool(new HistoryArchiveReader(archive, workspace)), new ReadObservationTool(session, workspace, archive));
                     var setup = new ArrayList<ToolCall>();
@@ -178,7 +178,7 @@ public final class HistoryFreshnessEvaluation {
             if (call.name().equals("read_file") && "docs/rate.txt".equals(call.arguments().get("path")) && text.contains("RATE=" + newRate)) {
                 freshRead = true; freshAfterStale |= staleSeen;
             }
-            if (call.name().equals("apply_patch") || call.name().equals("create_file")) {
+            if (call.name().equals("apply_patch") || call.name().equals("apply_patch_batch") || call.name().equals("create_file")) {
                 if (!"audit/result.json".equals(call.arguments().get("path"))) { docsUnmodified = false; }
             }
         }

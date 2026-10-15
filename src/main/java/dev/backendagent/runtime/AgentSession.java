@@ -22,7 +22,7 @@ public final class AgentSession {
         WORKSPACE_REVISION_ADVANCED, TEST_RESULT_RECORDED,
         WORKING_MEMORY_LOADED, HISTORY_BODIES_ARCHIVED, HISTORICAL_EVIDENCE_UPDATED, WINDOW_SUMMARY_ATTEMPTED, WINDOW_SUMMARY_SKIPPED, SESSION_RESUMED, SESSION_COMPLETED, SESSION_FAILED, BUDGET_EXHAUSTED,
         TOOL_BATCH_STARTED, TOOL_BATCH_PROGRESS, TOOL_BATCH_COMPLETED, TOOL_CALL_RETRY_AUTHORIZED, TOOL_EXECUTION_STARTED,
-        NO_PROGRESS_WARNING, NO_PROGRESS_STOPPED
+        NO_PROGRESS_WARNING, NO_PROGRESS_STOPPED, FINISH_REJECTED, MODEL_RESPONSE_NORMALIZED
     }
 
     public record Event(long sequence, EventType type, String detail) {}
@@ -48,6 +48,10 @@ public final class AgentSession {
     private boolean inFlightRetryValidated;
     private WorkspaceState workspaceState = WorkspaceState.initial();
     private NoProgressReport noProgressReport;
+    // Runtime capability, rebound on run/resume; required work is derived from durable history.
+    private boolean testToolAvailable;
+    private dev.backendagent.verification.VerificationState verificationState = new dev.backendagent.verification.VerificationState();
+    private dev.backendagent.tools.WorkspaceAccess verificationWorkspace;
     private final SessionEventSink eventSink;
     private final dev.backendagent.history.ObservationArchive archive;
     public static final int RECENT_FULL_BATCHES = ContextWindowPolicy.RECENT_BATCHES + ContextWindowPolicy.SUMMARY_BATCHES;
@@ -184,7 +188,12 @@ public final class AgentSession {
         }
         validateTurns(checkpoint);
         if(checkpoint.getConversationSummary()!=null) checkpoint.getConversationSummary().validateAgainst(checkpoint.getTurns());
-        return new AgentSession(checkpoint, recordedEvents, eventSink);
+        var restored = new AgentSession(checkpoint, recordedEvents, eventSink);
+        int start = restored.turns().getLast().getStartHistoryIndex();
+        for (var exchange : originals.subList(start, originals.size())) {
+            restored.verificationState.observe(exchange, restored.turns().size());
+        }
+        return restored;
     }
 
     private static void validateTurns(dev.backendagent.persistence.SessionCheckpoint checkpoint) {
@@ -232,6 +241,9 @@ public final class AgentSession {
         }
         return 0;
     }
+    void setTestToolAvailable(boolean available) { testToolAvailable = available; }
+    public boolean testToolAvailable() { return testToolAvailable; }
+
     public String currentTask() { return currentUserMessage; }
 
     void continueWith(String message) {
@@ -241,6 +253,7 @@ public final class AgentSession {
         completedTurns.add(turns().getLast());
         currentUserMessage = next.getUserMessage();
         turnStartHistoryIndex = history.size();
+        verificationState = new dev.backendagent.verification.VerificationState();
         answer = null;
         status = Status.RUNNING;
         append(EventType.USER_TURN_STARTED, "turn=" + next.getTurnId(), next);
@@ -325,6 +338,38 @@ public final class AgentSession {
     public int memoryCharacters() { return workingMemory.characterCount(); }
     public WorkspaceState workspaceState() { return workspaceState; }
     public NoProgressReport noProgressReport() { return noProgressReport; }
+    public dev.backendagent.verification.VerificationState verificationState() { return verificationState; }
+    public void bindVerificationWorkspace(dev.backendagent.tools.WorkspaceAccess workspace) {
+        verificationWorkspace = java.util.Objects.requireNonNull(workspace);
+    }
+    public void refreshVerificationBasis() {
+        if (verificationState.bases().isEmpty()) { return; }
+        java.util.Map<String,String> hashes = null;
+        try { if (verificationWorkspace != null) hashes = verificationWorkspace.checkpointHashes(); }
+        catch (java.io.IOException unavailable) { /* Unknown currency must not authorize registration. */ }
+        verificationState.refresh(hashes, staleEvidenceIds);
+    }
+    public int completionRejections() {
+        String prefix = "turn=" + turns().size() + ";";
+        return (int) events.stream().filter(e -> e.type() == EventType.FINISH_REJECTED
+                && e.detail().startsWith(prefix)).count();
+    }
+    public dev.backendagent.verification.TestFailureReport latestVerificationTest() {
+        var latest = workspaceState.getLatestTest();
+        if (latest == null) { return null; }
+        int start = turns().getLast().getStartHistoryIndex();
+        if (history.subList(start, history.size()).stream().noneMatch(e -> e.call().id().equals(latest.getCallId()))) {
+            return null;
+        }
+        var exchange = originalObservation(latest.getCallId());
+        return dev.backendagent.verification.TestFailureReport.from(latest.getCallId(), latest.getWorkspaceRevision(),
+                exchange.result().successful(), exchange.result().content());
+    }
+    public dev.backendagent.verification.VerificationContext verificationContext() {
+        var view = new dev.backendagent.verification.VerificationContext(turns().size(), verificationState,
+                completionRejections(), new dev.backendagent.verification.CompletionVerifier().rejection(this), latestVerificationTest());
+        return view.isEmpty() ? null : view;
+    }
     void setNoProgressReport(NoProgressReport report) { noProgressReport = report; }
 
     public void importVerifiedMemory(MemoryFact oldFact, ToolExchange verified, UUID sourceSessionId) {
@@ -535,6 +580,7 @@ public final class AgentSession {
     void countModelCall() { modelCalls++; }
     void remember(ToolExchange exchange) {
         exchange = bindEvidence(exchange);
+        verificationState.observe(exchange, turns().size());
         history.add(exchange);
         workspaceState = workspaceState.after(exchange);
         if (WorkspaceState.isSuccessfulWrite(exchange)) { invalidateHistoricalTests(); }

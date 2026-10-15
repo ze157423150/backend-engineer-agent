@@ -599,6 +599,7 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
             snapshot.set("contextProjection", json.valueToTree(session.contextProjection()));
             snapshot.set("contextSummary", json.valueToTree(session.contextSummary()));
             snapshot.set("workspaceState", json.valueToTree(session.workspaceState()));
+            snapshot.set("verificationContext", json.valueToTree(session.verificationContext()));
             snapshot.put("testStatus", session.workspaceState().testStatus().name());
             snapshot.set("workingMemory", json.valueToTree(session.memoryFacts()));
             snapshot.set("historicalEvidence", json.valueToTree(session.historicalEvidence()));

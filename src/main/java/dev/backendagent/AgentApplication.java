@@ -102,7 +102,7 @@ public final class AgentApplication {
             var sandbox = new DockerSandboxExecutor(runner, options.getSandboxImage(),
                     Duration.ofSeconds(options.getTestTimeoutSeconds()));
             var archive = store.observationArchive(session);
-            var tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace), new dev.backendagent.tools.IntegerCalculateTool(),
+            var tools = List.of(new ListFilesTool(workspace), new ReadFileTool(workspace), new dev.backendagent.tools.PinVerificationBasisTool(session, workspace), new dev.backendagent.tools.IntegerCalculateTool(),
                     new dev.backendagent.tools.ReadObservationTool(session, workspace, archive),
                     new dev.backendagent.tools.SearchHistoryTool(new dev.backendagent.history.HistoryArchiveReader(archive, workspace)),
                     new SearchCodeTool(workspace), new dev.backendagent.tools.SearchTurnsTool(session),

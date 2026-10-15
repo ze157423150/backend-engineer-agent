@@ -82,7 +82,8 @@ class SessionCheckpointTest {
                 assertEquals(dev.backendagent.runtime.WorkspaceState.TestStatus.STALE, request.workspaceState().testStatus());
                 return ModelResponse.finish("old test requires rerun");
             }, List.of(), 3).resume(restored);
-            assertEquals(AgentSession.Status.COMPLETED, restored.status());
+            assertEquals(AgentSession.Status.BUDGET_EXHAUSTED, restored.status());
+            assertEquals(1, restored.completionRejections());
         }
     }
     private UUID stopAfterRead() throws Exception {

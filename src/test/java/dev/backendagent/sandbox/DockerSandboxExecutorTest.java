@@ -116,7 +116,7 @@ class DockerSandboxExecutorTest {
                 return new CommandResult(1, false, "CalculatorTest: expected 5 but was -1");
             }
             assertTrue(code.contains("a + b"));
-            return new CommandResult(0, false, "Tests run: 1, Failures: 0\nBUILD SUCCESS");
+            return new CommandResult(0, false, "Tests run: 1, Failures: 0, Errors: 0, Skipped: 0\nBUILD SUCCESS");
         });
         var session = new AgentSession("fix addition and test");
         var turns = new AtomicInteger();

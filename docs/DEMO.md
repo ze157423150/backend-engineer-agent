@@ -243,6 +243,8 @@ java -jar target/backend-engineer-agent-1.0.0.jar \
 
 预览到确认期间持有同一会话锁。确认后先将目标目录原子移动为数据目录下隐藏的 `.deleted-...` 清理目录，再清除；不跟随符号链接。若清理期间I/O失败，会报告残留位置，不误报全部删除成功。删除无需调用模型或启动Docker。
 
+验证流程提供 `pin_verification_basis`：模型可固定本会话本轮已读取的契约片段，集中核对后直接生成测试，无需登记期望值。依据不跨会话共享，新用户轮次需重新选择；文件变更使依据失效。当前活动区、实际测试诊断与结束拒绝次数可在会话 `session.json` 的 `verificationContext` 中查看，恢复时从完整工具历史和事件重建。
+
 ## 常见问题
 
 | 现象 | 处理 |
@@ -251,7 +253,8 @@ java -jar target/backend-engineer-agent-1.0.0.jar \
 | 镜像不存在或worker不匹配 | 使用当前源码重新构建backend-agent-sandbox:local |
 | 离线Maven缺依赖 | 为目标项目提前准备镜像依赖；修改代码本身无法解决未预装依赖 |
 | 返回LENGTH | 调整model.max-output-tokens或缩小任务，再恢复；输出预算增大可能降低可用输入空间 |
-| COMPLETED但测试没通过 | 模型结束不等于验收通过；查看当前测试状态和执行结果 |
+| 结束请求被拒绝 | 本轮测试失败、过期或执行情况未知，需修正并重测；两次纠正后仍提前结束会停止 |
+| 普通查看任务COMPLETED但工作区仍有旧失败 | 新轮未执行测试时不强制修复旧轮；COMPLETED只说明本轮结束，仍需查看验证状态 |
 | CREATED会话无法打开 | 可能是初始化失败残留；/open不把CREATED当作可续聊会话，可/delete确认清理 |
 | 删除时提示未写回改动无法核验 | 缺少完整checkpoint、元数据损坏或副本不一致；不代表一定有未写回改动 |
 | 输入“确认”没有删除 | 必须输入提示中的DELETE与完整UUID，严格匹配 |
@@ -259,3 +262,5 @@ java -jar target/backend-engineer-agent-1.0.0.jar \
 | 日志没有逐条实时出现 | 压缩进度实时打印，完整事件在任务结束后统一打印 |
 
 [返回项目首页](../README.md) · [设计说明](ARCHITECTURE.md)
+
+同一文件多处修改可用 `apply_patch_batch`，参数 `patches` 为含 `id`、`old_text`、`new_text` 的JSON数组字符串。所有修改需基于同一原文；普通连续同文件 `apply_patch` 也会自动归并。出现 `PATCH_OVERLAP` 时整组没有写入，请按反馈中的ID与范围合并重叠修改后重新提交；不能假设前一处已成功。跨批次修改和外部改动仍需有效的当前文件依据。

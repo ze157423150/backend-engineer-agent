@@ -13,10 +13,12 @@ public final class ApplyPatchTool implements Tool {
         this.session = session;
     }
 
+    public ApplyPatchBatchTool batchTool() { return new ApplyPatchBatchTool(workspace, session); }
+
     public String name() { return "apply_patch"; }
     public ToolDefinition definition() {
         return new ToolDefinition(name(), "精确替换已有文本文件中的一处内容。使用当前上下文中仍有效的读取片段或成功创建参数，无需重复读取；旧文本只允许匹配一次。"
-                + "支持片段删除，不创建或删除文件，不执行命令。", Map.of(
+                + "同文件多处修改优先apply_patch_batch；同一响应中连续同文件补丁会整组校验，重叠整组拒绝。支持片段删除，不创建或删除文件，不执行命令。", Map.of(
                 "path", "工作区相对文件路径", "old_text", "从有效raw读取或成功创建参数复制旧文本，逐字匹配并保留缩进换行；缺少该片段时重新read_file(format=raw)",
                 "new_text", "替换后的文本，可为空；新旧文本各最多 24000 字符"));
     }

@@ -12,6 +12,72 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Opt-in real container verification after building the local image. Never invokes a model API. */
 @EnabledIfSystemProperty(named = "docker.integration", matches = "true")
 class DockerSandboxIntegrationTest {
+    @Test void contractBasisAndCompletionGateWorkWithRealMaven() throws Exception {
+        Path source=Files.createDirectory(root.resolve("source"));
+        Files.copy(Path.of("examples/test-repair/pom.xml"),source.resolve("pom.xml"));
+        Files.createDirectories(source.resolve("src/main/java/example"));
+        Files.createDirectories(source.resolve("src/test/java/example"));
+        Files.createDirectories(source.resolve("docs"));
+        Files.writeString(source.resolve("docs/tax.md"),"Tax in cents = (base*rate+5000)/10000; 1000 basis points = 10%.\n");
+        Files.writeString(source.resolve("src/main/java/example/Tax.java"),"package example; public class Tax { public static long tax(long base,int rate){ return (base*rate+5000)/10000; } }\n");
+        Files.writeString(source.resolve("src/test/java/example/TaxTest.java"),"package example; import org.junit.jupiter.api.Test; import static org.junit.jupiter.api.Assertions.*; class TaxTest { @Test void amount(){ assertEquals(180L, Tax.tax(18000,1000)); } }\n");
+        var runner=new LocalProcessRunner();Path sessionDir=Files.createDirectory(root.resolve("session"));
+        var workspace=DockerWorkspace.create(new Workspace(source,source.resolve("private.properties")),sessionDir,runner,DockerSandboxExecutor.DEFAULT_IMAGE);
+        var session=new dev.backendagent.runtime.AgentSession("verify tax");var step=new java.util.concurrent.atomic.AtomicInteger();
+        var tools=java.util.List.of(new dev.backendagent.tools.ReadFileTool(workspace),new dev.backendagent.tools.PinVerificationBasisTool(session,workspace),
+                new dev.backendagent.tools.ApplyPatchTool(workspace,session),
+                new dev.backendagent.tools.RunTestsTool(workspace,new DockerSandboxExecutor(runner,DockerSandboxExecutor.DEFAULT_IMAGE,Duration.ofSeconds(120))));
+        new dev.backendagent.runtime.AgentRuntime(request->switch(step.getAndIncrement()){
+            case 0->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("contract","read_file",java.util.Map.of("path","docs/tax.md","start_line","1","end_line","1","format","raw")));
+            case 1->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("pin","pin_verification_basis",java.util.Map.of("basis_id","TAX","source_call_id","contract","start_line","1","end_line","1")));
+            case 2->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("failed-test","run_tests",java.util.Map.of()));
+            case 3->dev.backendagent.model.ModelResponse.finish("done");
+            case 4->{
+                assertEquals(1,request.verificationContext().getCompletionRejections());
+                assertEquals("180",request.verificationContext().getLatestTest().getFailures().getFirst().getExpected());
+                assertEquals("1800",request.verificationContext().getLatestTest().getFailures().getFirst().getActual());
+                yield dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("read-test","read_file",java.util.Map.of("path","src/test/java/example/TaxTest.java","start_line","1","end_line","10","format","raw")));
+            }
+            case 5->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("fix-test","apply_patch",java.util.Map.of("path","src/test/java/example/TaxTest.java","old_text","assertEquals(180L,","new_text","assertEquals(1800L,")));
+            case 6->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("passed-test","run_tests",java.util.Map.of()));
+            default->dev.backendagent.model.ModelResponse.finish("verified");
+        },tools,12).run(session);
+        assertEquals(dev.backendagent.runtime.AgentSession.Status.COMPLETED,session.status());
+        assertEquals(1,session.completionRejections());assertEquals(2,session.history().stream().filter(e->e.call().name().equals("run_tests")).count());
+        assertTrue(Files.readString(source.resolve("src/test/java/example/TaxTest.java")).contains("assertEquals(180L,"));
+    }
+    @Test void untestedWriteIsRejectedBeforeRealMavenValidation() throws Exception {
+        Path source=Files.createDirectory(root.resolve("source"));
+        Files.copy(Path.of("examples/test-repair/pom.xml"),source.resolve("pom.xml"));
+        Files.createDirectories(source.resolve("src/main/java/example"));
+        Files.writeString(source.resolve("src/main/java/example/Value.java"),"package example; public class Value { public static int value(){return 1;} }\n");
+        var runner=new LocalProcessRunner();var sessionDir=Files.createDirectory(root.resolve("session"));
+        var workspace=DockerWorkspace.create(new Workspace(source,source.resolve("private.properties")),sessionDir,runner,DockerSandboxExecutor.DEFAULT_IMAGE);
+        var session=new dev.backendagent.runtime.AgentSession("create regression test and run it");var step=new java.util.concurrent.atomic.AtomicInteger();
+        var test="package example; import org.junit.jupiter.api.Test; import static org.junit.jupiter.api.Assertions.*; class ValueTest { @Test void value(){assertEquals(1, Value.value());} }\n";
+        new dev.backendagent.runtime.AgentRuntime(r->switch(step.getAndIncrement()){
+            case 0->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("write","create_file",java.util.Map.of("path","src/test/java/example/ValueTest.java","content",test)));
+            case 1->{assertTrue(r.verificationContext().getCompletionIssue().contains("尚未运行测试"));yield dev.backendagent.model.ModelResponse.finish("please confirm tests");}
+            case 2->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("test","run_tests",java.util.Map.of()));
+            default->dev.backendagent.model.ModelResponse.finish("verified");
+        },java.util.List.of(new dev.backendagent.tools.CreateFileTool(workspace,session),new dev.backendagent.tools.RunTestsTool(workspace,new DockerSandboxExecutor(runner,DockerSandboxExecutor.DEFAULT_IMAGE,Duration.ofSeconds(120)))),6).run(session);
+        assertEquals(dev.backendagent.runtime.AgentSession.Status.COMPLETED,session.status());assertEquals(1,session.completionRejections());
+        assertTrue(session.latestVerificationTest().verifiedPassed());assertFalse(Files.exists(source.resolve("src/test")));
+    }
+    @Test void groupedPatchesCommitOnceAndOverlapReturnsActionableFeedback() throws Exception {
+        var source=Files.createDirectory(root.resolve("source"));Files.writeString(source.resolve("Main.java"),"class Main { int a=1; int b=2; }\n");
+        var sessionDir=Files.createDirectory(root.resolve("session"));var w=DockerWorkspace.create(new Workspace(source,source.resolve("private.properties")),sessionDir,new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);
+        var session=new dev.backendagent.runtime.AgentSession("edit");var step=new java.util.concurrent.atomic.AtomicInteger();
+        new dev.backendagent.runtime.AgentRuntime(r->switch(step.getAndIncrement()){
+            case 0,2->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("read"+step.get(),"read_file",java.util.Map.of("path","Main.java","start_line","1","end_line","10","format","raw")));
+            case 1->dev.backendagent.model.ModelResponse.callTools(java.util.List.of(new dev.backendagent.model.ToolCall("a","apply_patch",java.util.Map.of("path","Main.java","old_text","a=1","new_text","a=10")),new dev.backendagent.model.ToolCall("b","apply_patch",java.util.Map.of("path","Main.java","old_text","b=2","new_text","b=20"))),null);
+            case 3->dev.backendagent.model.ModelResponse.callTools(java.util.List.of(new dev.backendagent.model.ToolCall("whole","apply_patch",java.util.Map.of("path","Main.java","old_text","a=10; int b=20","new_text","a=30; int b=40")),new dev.backendagent.model.ToolCall("part","apply_patch",java.util.Map.of("path","Main.java","old_text","b=20","new_text","b=50"))),null);
+            default->{assertTrue(r.history().getLast().result().content().contains("PATCH_OVERLAP"));assertTrue(r.history().getLast().result().content().contains("whole"));assertTrue(r.history().getLast().result().content().contains("全部未写入"));yield dev.backendagent.model.ModelResponse.finish("done");}
+        },java.util.List.of(new dev.backendagent.tools.ReadFileTool(w),new dev.backendagent.tools.ApplyPatchTool(w,session)),6).run(session);
+        assertEquals(dev.backendagent.runtime.AgentSession.Status.COMPLETED,session.status());assertEquals(1,session.workspaceState().getRevision());
+        assertEquals("class Main { int a=10; int b=20; }\n",Files.readString(sessionDir.resolve("workspace/Main.java")));
+        assertEquals("class Main { int a=1; int b=2; }\n",Files.readString(source.resolve("Main.java")));
+    }
     @Test void createdSourceCanBePatchedInContainerWithoutReadFile() throws Exception {
         Path source=Files.createDirectory(root.resolve("source"));Path sessionDir=Files.createDirectory(root.resolve("session"));
         var w=DockerWorkspace.create(new Workspace(source,source.resolve("agent-local.properties")),sessionDir,new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);

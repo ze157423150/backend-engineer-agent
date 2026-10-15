@@ -43,6 +43,7 @@ public final class WorkspaceWorker {
             case "read_file" -> Set.of("path", "start_line", "end_line");
             case "search_code" -> Set.of("path", "query");
             case "apply_patch" -> Set.of("path", "old_text", "new_text");
+            case "apply_patch_batch" -> Set.of("path", "expected_sha256", "patches");
             case "create_file" -> Set.of("path", "content");
             default -> throw new IllegalArgumentException("Operation not allowed");
         };
@@ -60,6 +61,8 @@ public final class WorkspaceWorker {
             case "file_fingerprint" -> new ToolResult(true, "file fingerprint", workspace.fileFingerprint(text(args, "path")));
             case "search_code" -> workspace.searchCode(text(args, "path"), text(args, "query"));
             case "apply_patch" -> workspace.applyPatch(text(args, "path"), text(args, "old_text"), text(args, "new_text"));
+            case "apply_patch_batch" -> workspace.applyPatchBatch(text(args,"path"),text(args,"expected_sha256"),
+                    JSON.readValue(text(args,"patches"),new com.fasterxml.jackson.core.type.TypeReference<java.util.List<dev.backendagent.tools.PatchEdit>>(){}));
             case "create_file" -> workspace.createFile(text(args, "path"), text(args, "content"));
             case "workspace_diff" -> workspace.diff(text(args, "path"));
             case "hashes" -> new ToolResult(true, "workspace hashes");

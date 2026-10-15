@@ -33,7 +33,9 @@ public final class ContextAssembler {
         var stale = StaleObservationFilter.staleIds(session.history());
         var visibleSummary = ContextWindowPolicy.visibleSummary(summary, session.history(), stale);
         var visibleDialogue=ConversationCompactor.visibleSummary(dialogueSummary,session.turns());
-        int summaryCost = (visibleSummary == null ? 0 : visibleSummary.characterCount()) + session.historicalEvidenceCharacters()+(visibleDialogue==null?0:visibleDialogue.characterCount());
+        var verification = session.verificationContext();
+        int summaryCost = (visibleSummary == null ? 0 : visibleSummary.characterCount()) + session.historicalEvidenceCharacters()+(visibleDialogue==null?0:visibleDialogue.characterCount())
+                + (verification == null ? 0 : verification.characterCount());
         if (summaryCost >= budget.getMaxHistoryCharacters()) {
             throw new IllegalStateException("Summary exceeds history budget; increase --max-history-chars");
         }
@@ -59,7 +61,7 @@ public final class ContextAssembler {
                     new ConversationTurn(turn.getTurnId(), turn.getUserMessage(),
                             turn.getStatus() == AgentSession.Status.COMPLETED ? AgentSession.Status.COMPLETED : AgentSession.Status.RUNNING,
                             turn.getAnswer(), turn.getStartHistoryIndex(), turn.getEndHistoryIndex())).toList(),visibleDialogue,session.turns().size())
-                .withNoProgressReport(session.noProgressReport());
+                .withNoProgressReport(session.noProgressReport()).withVerificationContext(verification);
     }
 
     ContextProjection project(List<dev.backendagent.model.ToolExchange> raw) {

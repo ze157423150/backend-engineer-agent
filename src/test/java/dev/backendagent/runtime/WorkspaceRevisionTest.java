@@ -41,7 +41,7 @@ class WorkspaceRevisionTest {
                 Path snapshot = Path.of(mount.substring("type=bind,src=".length(), mount.indexOf(",dst=")));
                 assertTrue(Files.readString(snapshot.resolve("Main.java")).contains("n = " + (runs.incrementAndGet())));
             }
-            return new CommandResult(0, false, "BUILD SUCCESS");
+            return new CommandResult(0, false, "Tests run: 1, Failures: 0, Errors: 0, Skipped: 0\nBUILD SUCCESS");
         }, "test-image:local", Duration.ofSeconds(2));
         var turns = new AtomicInteger();
         new AgentRuntime(request -> {
@@ -109,7 +109,8 @@ class WorkspaceRevisionTest {
             }
         }, List.of(new ApplyPatchTool(workspace, session), new CreateFileTool(workspace, session),
                 new RunTestsTool(workspace, executor)), 5).run(session);
-        assertEquals(AgentSession.Status.COMPLETED, session.status());
+        assertEquals(AgentSession.Status.BUDGET_EXHAUSTED, session.status());
+        assertEquals(1, session.completionRejections());
     }
 
     @Test

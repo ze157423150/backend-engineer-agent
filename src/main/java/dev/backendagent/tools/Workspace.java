@@ -321,6 +321,10 @@ public final class Workspace implements WorkspaceAccess {
         if (oldText.equals(newText)) {
             return failure("新旧文本相同，没有实际修改");
         }
+        return applyPatchBatch(relativePath, null, java.util.List.of(new PatchEdit("single",oldText,newText)));
+    }
+
+    @Override public ToolResult applyPatchBatch(String relativePath, String expectedSha256, java.util.List<PatchEdit> edits) {
         Path temporary = null;
         try {
             Path file = resolve(relativePath);
@@ -335,16 +339,12 @@ public final class Workspace implements WorkspaceAccess {
                 return failure("本次运行最多修改 32 个文件");
             }
             String before = Files.readString(file);
-            int position = before.indexOf(oldText);
-            if (position < 0) {
-                String hint = before.replaceAll("(?m)^[ \\t]+", "").contains(oldText.replaceAll("(?m)^[ \\t]+", ""))
-                        ? "疑似缩进不一致；" : "";
-                return failure("旧文本未找到；" + hint + "请read_file(format=raw)重新读取，原样保留空格和换行后重试；文件未修改");
+            if (expectedSha256 != null && !fingerprint(file,before.getBytes(StandardCharsets.UTF_8)).getSha256().equals(expectedSha256)) {
+                return failure("PATCH_BASELINE_CHANGED: 执行前文件指纹已变化；本组全部未写入，请重新读取当前文件。");
             }
-            if (before.indexOf(oldText, position + 1) >= 0) {
-                return failure("旧文本匹配多处，必须精确匹配一次；请read_file(format=raw)读取更完整上下文；文件未修改");
-            }
-            String after = before.substring(0, position) + newText + before.substring(position + oldText.length());
+            String after;
+            try { after = PatchPlan.apply(before, edits); }
+            catch (IllegalArgumentException conflict) { return failure(conflict.getMessage()); }
             byte[] bytes = after.getBytes(StandardCharsets.UTF_8);
             if (bytes.length > MAX_FILE_BYTES || after.indexOf('\0') >= 0) {
                 return failure("修改后内容超过 256 KiB 或包含空字符；文件未修改");
@@ -360,7 +360,7 @@ public final class Workspace implements WorkspaceAccess {
             Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             originals.putIfAbsent(file, before);
             return new ToolResult(true, "file=" + relative(file)
-                    + "\n已完成一次精确替换。请用 workspace_diff 检查改动；尚未运行编译或测试。");
+                    + "\n已完成一次精确替换。补丁数=" + edits.size() + "，均基于同一版本验证、一次原子写入。请用 workspace_diff 检查改动；尚未运行编译或测试。");
         } catch (IOException | IllegalArgumentException failure) {
             return failure("补丁未应用：检查相对路径、文本编码、文件权限和原子写入支持；禁止密钥、隐藏路径和符号链接");
         } finally {

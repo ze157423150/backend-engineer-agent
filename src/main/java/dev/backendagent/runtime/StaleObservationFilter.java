@@ -21,6 +21,8 @@ public final class StaleObservationFilter {
         var searches = new HashSet<String>();
         var tests = new HashSet<String>();
         var aliases = new HashMap<String, Set<String>>();
+        var basisCalls = new HashMap<String, String>();
+        var basisSelections = new HashMap<String, String>();
         for (var exchange : raw) {
             String tool = exchange.call().name();
             String id = exchange.call().id();
@@ -39,6 +41,23 @@ public final class StaleObservationFilter {
                 searches.add(id);
             } else if (tool.equals("run_tests")) {
                 tests.add(id);
+            } else if (tool.equals("pin_verification_basis") && exchange.result().successful()) {
+                String basis = exchange.call().arguments().get("basis_id");
+                String source = exchange.call().arguments().get("source_call_id");
+                if (basis != null && source != null) {
+                    String previous = basisCalls.put(basis, id);
+                    String selection = source + "\n" + normalizedLine(exchange.call().arguments().get("start_line"))
+                            + ":" + normalizedLine(exchange.call().arguments().get("end_line"));
+                    String previousSelection = basisSelections.put(basis, selection);
+                    if (previous != null && !selection.equals(previousSelection)) { markStale(Set.of(previous), stale, aliases); }
+                    else if (previous != null) {
+                        // Equivalent re-pins retain old registrations, but a later replacement
+                        // must invalidate every equivalent pin.
+                        aliases.computeIfAbsent(id, ignored -> new HashSet<>()).add(previous);
+                    }
+                    aliases.computeIfAbsent(source, ignored -> new HashSet<>()).add(id);
+                    if (stale.contains(source)) { markStale(Set.of(id), stale, aliases); }
+                }
             } else if (tool.equals("read_observation")) {
                 String source = exchange.call().arguments().get("call_id");
                 if (source != null) {
@@ -48,6 +67,11 @@ public final class StaleObservationFilter {
             }
         }
         return Set.copyOf(stale);
+    }
+
+    private static String normalizedLine(String line) {
+        try { return Integer.toString(Integer.parseInt(line)); }
+        catch (NumberFormatException invalid) { return String.valueOf(line); }
     }
 
     private static void markStale(Set<String> ids, Set<String> stale, Map<String, Set<String>> aliases) {
@@ -88,6 +112,7 @@ public final class StaleObservationFilter {
                 case "search_code" -> "搜索范围可能变化，需要当前结果请重新 search_code";
                 case "search_history" -> "旧索引中的证据状态可能变化，请重新 search_history";
                 case "run_tests" -> "源码已修改，需要当前验证请重新 run_tests";
+                case "pin_verification_basis" -> "验证依据失效，请重新读取契约并pin_verification_basis";
                 default -> "旧提取内容已过期，需要历史追溯请重新 read_observation";
             };
             String placeholder = "[STALE_OBSERVATION_BODY_OMITTED] call_id=" + exchange.call().id()

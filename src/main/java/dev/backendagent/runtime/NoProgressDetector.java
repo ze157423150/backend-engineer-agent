@@ -56,7 +56,7 @@ public final class NoProgressDetector {
                 try { target = java.nio.file.Path.of(target).normalize().toString(); }
                 catch (java.nio.file.InvalidPathException ignored) { /* Count failed invalid paths as supplied. */ }
                 if (WorkspaceState.isSuccessfulWrite(exchange)) patchFailures.remove(target);
-                else if (exchange.call().name().equals("apply_patch") && !exchange.result().successful())
+                else if ((exchange.call().name().equals("apply_patch") || exchange.call().name().equals("apply_patch_batch")) && !exchange.result().successful())
                     patchFailures.merge(target, 1, Integer::sum);
             }
             if (WorkspaceState.isSuccessfulWrite(exchange)) {
@@ -67,7 +67,8 @@ public final class NoProgressDetector {
             } else if(exchange.call().name().equals("read_file")&&exchange.result().successful()
                     &&exchange.result().fileFingerprint()!=null&&exchange.result().readMetadata()!=null){
                 progress |= readCoverage.observe(exchange.result().fileFingerprint(),exchange.result().readMetadata());
-            } else if (!exchange.call().name().equals("remember_fact") || !exchange.result().successful()) {
+            } else if (!java.util.Set.of("remember_fact", "pin_verification_basis")
+                    .contains(exchange.call().name()) || !exchange.result().successful()) {
                 progress |= seen.add(signature(exchange));
             }
             // remember_fact and other bookkeeping are not independent workspace observations.

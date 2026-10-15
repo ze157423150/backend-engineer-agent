@@ -51,7 +51,7 @@ class ContextComparisonTest {
             public String name() { return "run_tests"; }
             public ToolResult execute(Map<String, String> args) {
                 boolean passed = tests.incrementAndGet() > 1;
-                return new ToolResult(passed, "[FIXED TEST DOUBLE; no Docker or Maven execution] "
+                return new ToolResult(passed, "testExecution=EXECUTED\ntestsExecuted=1\n[FIXED TEST DOUBLE; no Docker or Maven execution] "
                         + (passed ? "fixture status PASSED" : "fixture assertion expected 2 but was 1"));
             }
         };
@@ -139,7 +139,7 @@ class ContextComparisonTest {
                     var full = StaleObservationFilter.filter(originals);
                     var baseline = new ModelRequest(request.objective(), full, request.availableTools(), request.remainingModelCalls(),
                             0, 0, request.workingMemory(), null, null, Set.of(), request.workspaceState())
-                            .withNoProgressReport(request.noProgressReport());
+                            .withNoProgressReport(request.noProgressReport()).withVerificationContext(request.verificationContext());
                     try {
                         String fullJson = json.writeValueAsString(client.buildRequest(baseline));
                         String layeredJson = json.writeValueAsString(client.buildRequest(request));

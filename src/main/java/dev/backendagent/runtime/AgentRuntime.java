@@ -59,6 +59,9 @@ public final class AgentRuntime {
                 throw new IllegalArgumentException("Invalid or duplicate tool name: " + name);
             }
         }
+        if (this.tools.get("apply_patch") instanceof dev.backendagent.tools.ApplyPatchTool patch) {
+            this.tools.putIfAbsent("apply_patch_batch", patch.batchTool());
+        }
     }
 
     public void run(AgentSession session) {
@@ -91,8 +94,9 @@ public final class AgentRuntime {
     }
 
     private void executeLoop(AgentSession session) {
+        session.setTestToolAvailable(tools.containsKey("run_tests"));
         Set<String> seenCallIds = new HashSet<>();
-        session.history().forEach(exchange -> seenCallIds.add(exchange.call().id()));
+        session.history().forEach(exchange -> seenCallIds.addAll(PatchBatchNormalizer.ids(exchange.call())));
         boolean completeToolBatch = true;
         try {
             var noProgress = NoProgressDetector.start(session);
@@ -100,7 +104,7 @@ public final class AgentRuntime {
             while (session.status() == RUNNING) {
                 if (session.pendingToolBatch() != null) {
                     completeToolBatch = false;
-                    session.pendingToolBatch().getCalls().forEach(call -> seenCallIds.add(call.id()));
+                    session.pendingToolBatch().getCalls().forEach(call -> seenCallIds.addAll(PatchBatchNormalizer.ids(call)));
                     executePendingBatch(session);
                     completeToolBatch = true;
                     var report = noProgress.observeCompletedHistory(session);
@@ -146,9 +150,33 @@ public final class AgentRuntime {
                         + ", filteredExchanges=" + context.contextProjection().getFilteredExchanges(),
                         context.contextProjection());
                 ModelResponse response = executeModelWithRetry(session, context);
+                if (response.getType() == ModelResponse.Type.TOOL_CALL) {
+                    var originalIds = new HashSet<String>();
+                    for (var call : response.getToolCalls()) {
+                        for (String id : PatchBatchNormalizer.ids(call)) {
+                            if (seenCallIds.contains(id) || !originalIds.add(id)) throw new IllegalStateException("Duplicate tool call id: " + id);
+                        }
+                    }
+                    if (tools.get("apply_patch_batch") instanceof dev.backendagent.tools.ApplyPatchBatchTool) {
+                        var normalized=PatchBatchNormalizer.normalize(response);
+                        if(normalized!=response)session.append(MODEL_RESPONSE_NORMALIZED,"Combined adjacent same-file patches into one durable atomic operation",response);
+                        response=normalized;
+                    }
+                }
                 session.append(MODEL_RESPONSE_RECEIVED, response.toString(), response);
 
                 if (response.getType() == ModelResponse.Type.FINISH) {
+                    String rejection = new dev.backendagent.verification.CompletionVerifier().rejection(session);
+                    if (rejection != null) {
+                        session.append(AgentSession.EventType.FINISH_REJECTED,
+                                "turn=" + session.turns().size() + "; " + rejection);
+                        progress.accept("结束请求被拒绝：" + rejection);
+                        session.checkpoint();
+                        if (session.completionRejections() > 2) {
+                            throw new dev.backendagent.verification.CompletionVerifier.IncompleteVerificationException();
+                        }
+                        continue;
+                    }
                     session.finish(response.getAnswer());
                     session.transitionTo(COMPLETED);
                     session.append(SESSION_COMPLETED, response.getAnswer());
@@ -264,6 +292,7 @@ public final class AgentRuntime {
     }
 
     private PreparedContext prepareContext(AgentSession session, ContextSummary summary, boolean install) {
+        session.refreshVerificationBasis();
         var definitions = tools.values().stream().map(Tool::definition).toList();
         int remaining = maxModelCalls - session.modelCalls();
         var initial = contextAssembler.preview(session, definitions, remaining, summary);
