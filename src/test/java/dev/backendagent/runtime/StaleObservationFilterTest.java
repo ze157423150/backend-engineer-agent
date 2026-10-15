@@ -111,7 +111,7 @@ class StaleObservationFilterTest {
         var session = session(raw.toArray(ToolExchange[]::new));
         var projection = new ContextAssembler(new ContextBudget(1000)).assemble(session, List.of(), 2).contextProjection();
         assertEquals(0, projection.getOmittedExchanges());
-        assertEquals(5, projection.getPolicyVersion());
+        assertEquals(6, projection.getPolicyVersion());
         assertTrue(projection.getHistoryCharacters() <= 1000);
         projection.validateAgainst(raw);
         var legacy = new ContextAssembler(new ContextBudget(20000)).project(raw, false);

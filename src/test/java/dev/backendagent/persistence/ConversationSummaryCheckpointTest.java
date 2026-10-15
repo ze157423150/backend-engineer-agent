@@ -19,7 +19,7 @@ class ConversationSummaryCheckpointTest {
                 var source=request.messages().getFirst();
                 return List.of(new SummaryNote(SummaryNote.Kind.PROGRESS,"历史用户输入："+source.content(),source.id(),source.content()));
             }
-            public ModelResponse execute(ModelRequest request){return ModelResponse.finish("已完成"+"x".repeat(1000));}
+            public ModelResponse execute(ModelRequest request){return ModelResponse.finish("已完成"+"x".repeat(900));}
         };
     }
     private UUID prepared() throws Exception {
@@ -47,7 +47,7 @@ class ConversationSummaryCheckpointTest {
                     var source=request.messages().getFirst();
                     return List.of(new SummaryNote(SummaryNote.Kind.PROGRESS,"历史输入",source.id(),source.content()));
                 }
-                public ModelResponse execute(ModelRequest request){return ModelResponse.finish("已完成"+"x".repeat(1000));}
+                public ModelResponse execute(ModelRequest request){return ModelResponse.finish("已完成"+"x".repeat(900));}
             };
             for(int i=8;i<=11;i++)new AgentRuntime(client,List.of(),40).continueConversation(session,"新要求"+i);
             assertEquals(2,session.conversationSummary().getRevision());assertEquals(8,session.conversationSummary().getCoveredTurns());

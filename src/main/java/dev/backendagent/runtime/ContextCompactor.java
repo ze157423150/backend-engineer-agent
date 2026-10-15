@@ -45,7 +45,7 @@ public final class ContextCompactor {
             for (int index = start; index < end; index++) {
                 var saved = raw.get(index);
                 // Only reload eligible middle-window evidence, never the distant archive or stale bodies.
-                if (!stale.contains(saved.call().id())) {
+                if (!stale.contains(saved.call().id()) && SummarySourcePolicy.substantive(saved)) {
                     input.add(excerpt(session.originalObservation(saved.call().id())));
                 }
             }
@@ -71,6 +71,20 @@ public final class ContextCompactor {
     private ToolExchange excerpt(ToolExchange raw) {
         // Rule compressor retains test diagnostics before this final input cap.
         String pruned = new ToolResultCompressor().compress(raw).result().content();
+        if (raw.call().name().equals("run_tests")) {
+            var selected = new StringBuilder();
+            String total = null;
+            for (String line : raw.result().content().split("\\R")) {
+                if (line.startsWith("workspaceRevision=") || line.startsWith("status=") || line.startsWith("exitCode=")
+                        || line.startsWith("command=") || line.startsWith("testExecution=") || line.startsWith("testsExecuted=")
+                        || (!raw.result().successful() && (line.contains("[ERROR]") || line.contains("expected:") || line.contains("Caused by:")))) {
+                    if (selected.length() + line.length() + 1 <= 2300) selected.append(line).append('\n');
+                }
+                if (line.startsWith("[INFO] Tests run:")) total = line;
+            }
+            if (total != null && selected.length() + total.length() + 1 <= 2400) selected.append(total).append('\n');
+            if (!selected.isEmpty()) pruned = selected.toString();
+        }
         if (pruned.length() > 2400) {
             pruned = pruned.substring(0, 1600) + "\n[摘要输入有省略，原文可用 read_observation 取回]\n"
                     + pruned.substring(pruned.length() - 700);
@@ -96,7 +110,10 @@ public final class ContextCompactor {
             if (note.getKind() == SummaryNote.Kind.NEXT_STEP) {
                 throw new IllegalArgumentException("New summaries cannot contain NEXT_STEP");
             }
-            if (session.history().subList(oldest, recent).stream().noneMatch(exchange -> exchange.call().id().equals(note.getSourceCallId()))) {
+            boolean carried = request.getPreviousSummary() != null && request.getPreviousSummary().getNotes().stream()
+                    .anyMatch(old -> old.getSourceCallId().equals(note.getSourceCallId())
+                            && old.getEvidenceQuote().equals(note.getEvidenceQuote()));
+            if (!carried && session.history().subList(oldest, recent).stream().noneMatch(exchange -> exchange.call().id().equals(note.getSourceCallId()))) {
                 throw new IllegalArgumentException("Summary source is outside the middle window");
             }
             if (stale.contains(note.getSourceCallId())) {

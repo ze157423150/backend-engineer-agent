@@ -636,6 +636,28 @@ class DeepSeekModelClientTest {
         return new SummaryRequest("inspect", null, 0, 1, 2000, List.of(observation));
     }
 
+    @Test void parsesFixedSectionsWithMoreThanEightFactsAndKeepsQuotesInternal() throws Exception {
+        var sections = json.createObjectNode();
+        for (var section : dev.backendagent.runtime.SummarySection.values()) sections.putArray(section.name());
+        for (int i=0;i<9;i++) sections.withArray("FINDINGS").addObject().put("statement", "fact "+i).put("evidenceId", "E1");
+        var response=json.createObjectNode();response.set("sections",sections);
+        responses.add(finalResponse(response.toString()));
+        var notes=client(Duration.ofSeconds(5)).summarize(summaryRequest());
+        assertEquals(9,notes.size());
+        assertEquals(dev.backendagent.runtime.SummarySection.FINDINGS,notes.getFirst().getSection());
+        assertEquals("class Main {}",notes.getFirst().getEvidenceQuote());
+        var view=new dev.backendagent.runtime.ContextSummary(1,1,notes).contextData();
+        assertFalse(view.toString().contains("evidenceQuote"));
+        assertEquals(9,view.path("sections").path("FINDINGS").size());
+    }
+
+    @Test void rejectsMissingSectionsAndUnexpectedBulletFields() {
+        responses.add(finalResponse("{\"sections\":{\"FINDINGS\":[]}}"));
+        assertThrows(RuntimeException.class,()->client(Duration.ofSeconds(5)).summarize(summaryRequest()));
+        responses.add(finalResponse("{\"sections\":{\"CONSTRAINTS\":[],\"FINDINGS\":[{\"statement\":\"fact\",\"evidenceId\":\"E1\",\"extra\":\"x\"}],\"CHANGES_AND_TESTS\":[],\"OPEN_ISSUES\":[]}}"));
+        assertThrows(RuntimeException.class,()->client(Duration.ofSeconds(5)).summarize(summaryRequest()));
+    }
+
     @Test
     void sendsToolFreeJsonSummaryRequestAndParsesReferencedNotes() throws Exception {
         responses.add(finalResponse("{\"notes\":[{\"kind\":\"PROGRESS\",\"statement\":\"Main exists\","

@@ -34,8 +34,10 @@ public final class ContextWindowPolicy {
         int oldest = suffixStart(history, RECENT_BATCHES + SUMMARY_BATCHES);
         var allowed = new HashSet<String>();
         for (int index = oldest; index < recent; index++) { allowed.add(history.get(index).call().id()); }
-        var notes = summary.getNotes().stream().filter(note -> allowed.contains(note.getSourceCallId())
-                && !stale.contains(note.getSourceCallId())).toList();
+        // A checkpoint may carry still-valid older facts; only raw candidates use the middle window.
+        var sources = history.stream().collect(java.util.stream.Collectors.toMap(e -> e.call().id(), e -> e));
+        var notes = summary.getNotes().stream().filter(note -> !stale.contains(note.getSourceCallId())
+                && sources.containsKey(note.getSourceCallId()) && SummarySourcePolicy.substantive(sources.get(note.getSourceCallId()))).toList();
         return notes.isEmpty() ? null : new ContextSummary(summary.getRevision(), summary.getCoveredExchanges(), notes);
     }
 }

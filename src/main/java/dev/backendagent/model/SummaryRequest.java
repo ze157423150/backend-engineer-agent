@@ -45,7 +45,9 @@ public final class SummaryRequest {
     /** The same reference-data encoding is used by planning and transport; no duplicate raw bodies. */
     public com.fasterxml.jackson.databind.node.ObjectNode referenceData() {
         var reference = JSON.createObjectNode();
-        reference.put("objective", getObjective()).put("maxOutputCharacters", getMaxOutputCharacters());
+        reference.put("objective", getObjective()).put("maxOutputCharacters", getMaxOutputCharacters())
+                .put("recommendedMaximumItems", Math.max(1, Math.min(32, getMaxOutputCharacters() / 240)));
+        reference.put("budgetNotice", "推荐条数仅为预算引导，不是填满要求；总长度包含每条statement、真实sourceCallId和JSON结构，不含内部证据引句。");
         reference.set("evidence", JSON.valueToTree(getEvidence()));
         var observations = reference.putArray("observations");
         for (var exchange : getObservations()) {
@@ -60,6 +62,7 @@ public final class SummaryRequest {
                 getEvidence().stream().filter(e -> e.getSourceCallId().equals(note.getSourceCallId())
                         && e.getEvidenceQuote().equals(note.getEvidenceQuote())).findFirst().ifPresent(e ->
                         previous.addObject().put("kind", note.getKind().name()).put("statement", note.getStatement())
+                                .put("section", note.getSection() == null ? "FINDINGS" : note.getSection().name())
                                 .put("evidenceId", e.getEvidenceId()));
             }
         }

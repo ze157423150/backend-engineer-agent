@@ -14,10 +14,11 @@ public final class ConversationSummary {
     @JsonCreator
     public ConversationSummary(@JsonProperty("revision") int revision, @JsonProperty("coveredTurns") int coveredTurns,
             @JsonProperty("notes") List<SummaryNote> notes) {
-        if (revision < 1 || coveredTurns < 1 || notes == null || notes.isEmpty() || notes.size() > 8)
+        if (revision < 1 || coveredTurns < 1 || notes == null || notes.isEmpty() || notes.size() > SummaryContextView.MAX_NOTES)
             throw new IllegalArgumentException("Invalid context summary");
         this.revision=revision; this.coveredTurns=coveredTurns; this.notes=List.copyOf(notes);
-        if (characterCount()>4000) throw new IllegalArgumentException("Summary exceeds character limit");
+        if (characterCount()>4000 || referenceJson().length()>SummaryContextView.MAX_STORED_CHARACTERS)
+            throw new IllegalArgumentException("Summary exceeds character limit");
     }
     public void validateAgainst(List<ConversationTurn> turns) {
         if (coveredTurns > turns.size()) throw new IllegalArgumentException("Invalid context summary");
@@ -38,7 +39,10 @@ public final class ConversationSummary {
         try { return new ObjectMapper().writeValueAsString(this); }
         catch (java.io.IOException failure) { throw new IllegalStateException("Cannot encode conversation summary", failure); }
     }
-    public int characterCount() { return referenceJson().length(); }
+    public com.fasterxml.jackson.databind.node.ObjectNode contextData() {
+        return SummaryContextView.data(revision, "coveredTurns", coveredTurns, notes);
+    }
+    public int characterCount() { return contextData().toString().length(); }
     public int getRevision(){ return revision; }
     public int getCoveredTurns(){ return coveredTurns; }
     public List<SummaryNote> getNotes(){ return notes; }

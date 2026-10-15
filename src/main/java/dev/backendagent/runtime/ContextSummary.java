@@ -17,13 +17,15 @@ public final class ContextSummary {
     public ContextSummary(@JsonProperty("revision") int revision,
             @JsonProperty("coveredExchanges") int coveredExchanges,
             @JsonProperty("notes") List<SummaryNote> notes) {
-        if (revision < 1 || coveredExchanges < 1 || notes == null || notes.isEmpty() || notes.size() > 8) {
+        if (revision < 1 || coveredExchanges < 1 || notes == null || notes.isEmpty() || notes.size() > SummaryContextView.MAX_NOTES) {
             throw new IllegalArgumentException("Invalid context summary");
         }
         this.revision = revision;
         this.coveredExchanges = coveredExchanges;
         this.notes = List.copyOf(notes);
-        if (characterCount() > 4000) { throw new IllegalArgumentException("Summary exceeds character limit"); }
+        if (characterCount() > 4000 || referenceJson().length() > SummaryContextView.MAX_STORED_CHARACTERS) {
+            throw new IllegalArgumentException("Summary exceeds character limit");
+        }
     }
     public void validateAgainst(List<ToolExchange> raw) {
         validateAgainst(raw, id -> raw.stream().filter(exchange -> exchange.call().id().equals(id)).findFirst().orElseThrow());
@@ -47,7 +49,10 @@ public final class ContextSummary {
         try { return JSON.writeValueAsString(this); }
         catch (java.io.IOException failure) { throw new IllegalStateException("Cannot encode summary", failure); }
     }
-    public int characterCount() { return referenceJson().length(); }
+    public com.fasterxml.jackson.databind.node.ObjectNode contextData() {
+        return SummaryContextView.data(revision, "coveredExchanges", coveredExchanges, notes);
+    }
+    public int characterCount() { return contextData().toString().length(); }
     /** A view only; persisted summary and its historical quotations remain intact. */
     public ContextSummary withoutStaleSources(java.util.Set<String> stale) {
         var currentNotes = notes.stream().filter(note -> !stale.contains(note.getSourceCallId())).toList();

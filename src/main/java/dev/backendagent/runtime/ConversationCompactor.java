@@ -6,6 +6,8 @@ import java.util.*;
 /** Recent dialogue stays raw; middle dialogue is incrementally summarized; oldest remains retrievable. */
 public final class ConversationCompactor {
     public static final int RECENT_TURNS=2, MIDDLE_TURNS=8, INTERVAL=4;
+    public static final int MAX_INPUT_CHARACTERS=24000;
+    public static final int MAX_NEW_CONTENT_CHARACTERS=4000;
     private final int minimumInputCharacters;
     public ConversationCompactor(int minimumInputCharacters) { this.minimumInputCharacters=minimumInputCharacters; }
     public static List<ConversationMessage> messages(ConversationTurn turn) {
@@ -16,7 +18,7 @@ public final class ConversationCompactor {
         int recent=Math.max(0, turns.size()-1-RECENT_TURNS), oldest=Math.max(0,recent-MIDDLE_TURNS);
         var ids=new HashSet<String>();
         for (var turn : turns.subList(oldest,recent)) for (var message : messages(turn)) ids.add(message.id());
-        var notes=summary.getNotes().stream().filter(n->ids.contains(n.getSourceCallId())).toList();
+        var notes=summary.getNotes();
         return notes.isEmpty()?null:new ConversationSummary(summary.getRevision(),summary.getCoveredTurns(),notes);
     }
     public static List<ConversationTurn> visibleTurns(List<ConversationTurn> turns, ConversationSummary summary,
@@ -49,7 +51,11 @@ public final class ConversationCompactor {
             }
             var proposed=new ArrayList<>(input);proposed.addAll(batch);
             var candidate=new ConversationSummaryRequest(session.currentTask(),visibleSummary(session.conversationSummary(),turns),from,to+1,4000,proposed);
-            try { if (new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(candidate).length()>24000) break; }
+            // Bound new dialogue separately from the carried checkpoint; do not charge audit storage twice.
+            long newCharacters=proposed.stream().mapToLong(m->m.content().length()).sum();
+            if (!input.isEmpty() && newCharacters>MAX_NEW_CONTENT_CHARACTERS) break;
+            // Always preserve a whole user/answer pair; unselected turns remain raw.
+            try { if (new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(candidate.referenceData()).length()>MAX_INPUT_CHARACTERS) break; }
             catch (java.io.IOException failure) { throw new IllegalStateException("Cannot encode conversation input",failure); }
             input=proposed;
         }
@@ -70,7 +76,9 @@ public final class ConversationCompactor {
         var allowed=new HashSet<String>();
         for(var turn:session.turns().subList(oldest,recent)) for(var message:messages(turn)) allowed.add(message.id());
         for(var note:notes) {
-            if(!allowed.contains(note.getSourceCallId())) throw new IllegalArgumentException("Summary source is outside the middle window");
+            boolean carried=request.previousSummary()!=null && request.previousSummary().getNotes().stream().anyMatch(n->
+                    n.getSourceCallId().equals(note.getSourceCallId())&&n.getEvidenceQuote().equals(note.getEvidenceQuote()));
+            if(!carried && !allowed.contains(note.getSourceCallId())) throw new IllegalArgumentException("Summary source is outside the middle window");
             boolean visible=request.messages().stream().anyMatch(m->m.id().equals(note.getSourceCallId())&&m.content().contains(note.getEvidenceQuote()));
             if(!visible && request.previousSummary()!=null) visible=request.previousSummary().getNotes().stream().anyMatch(n->n.getSourceCallId().equals(note.getSourceCallId())&&n.getEvidenceQuote().equals(note.getEvidenceQuote()));
             if(!visible) throw new IllegalArgumentException("Summary quote was not in summary input");

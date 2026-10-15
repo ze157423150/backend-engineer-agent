@@ -272,13 +272,13 @@ class SessionCheckpointTest {
             }, List.of(read, small), 3, new dev.backendagent.runtime.ContextBudget(26000)).run(session);
             // The checkpoint includes the third tool result and the last view sent before that result.
             id = session.id();
-            assertEquals(0, session.contextProjection().getCompressedExchanges());
-            assertEquals(5, session.contextProjection().getPolicyVersion());
+            assertEquals(2, session.contextProjection().getCompressedExchanges());
+            assertEquals(6, session.contextProjection().getPolicyVersion());
         }
         try (var store = new FileSessionStore(data())) {
             var restored = store.restore(id, workspace(), 4);
             assertEquals(raw, restored.history().getFirst().result().content());
-            assertEquals(0, restored.contextProjection().getCompressedExchanges());
+            assertEquals(2, restored.contextProjection().getCompressedExchanges());
             assertTrue(new ReadObservationTool(restored).execute(Map.of("call_id", "old",
                     "start_line", "1802", "end_line", "1802")).content().contains("middle evidence"));
         }

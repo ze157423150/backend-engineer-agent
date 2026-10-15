@@ -5,6 +5,16 @@ import dev.backendagent.model.ToolResult;
 
 /** Deterministic excerpts, never a model-written summary. Durable original observations remain in the archive. */
 public final class ToolResultCompressor {
+    /** Current policy may prune even the latest result; never authorize a partial body as a full read. */
+    public ToolExchange prune(ToolExchange source) {
+        var compressed = compress(source);
+        if (compressed == source) { return source; }
+        var original = source.result();
+        return new ToolExchange(source.call(), new ToolResult(original.successful(), compressed.result().content(),
+                original.fileFingerprint(), original.historicalEvidence(),
+                original.readMetadata() == null ? null : original.readMetadata().excerpt()),
+                source.assistantContent(), source.modelCallNumber(), source.evidence());
+    }
     public ToolExchange compress(ToolExchange source) {
         String raw = source.result().content();
         if (raw.length() <= 8192) { return source; }

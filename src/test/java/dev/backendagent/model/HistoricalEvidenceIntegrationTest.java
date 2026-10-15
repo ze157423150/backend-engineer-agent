@@ -53,6 +53,14 @@ class HistoricalEvidenceIntegrationTest {
                 assertEquals(wire.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length, client.inspectRequest(request).getRequestBytes());
                 assertTrue(wire.toString().contains("historical_evidence_reference_data"));
                 assertTrue(wire.toString().contains("HISTORICAL_ONLY"));
+                for (String callId : List.of("original", "retrieve")) {
+                    var message = java.util.stream.StreamSupport.stream(wire.path("messages").spliterator(), false)
+                            .filter(m -> m.path("tool_call_id").asText().equals(callId)).findFirst().orElseThrow();
+                    var result = assertDoesNotThrow(() -> json.readTree(message.path("content").asText()));
+                    assertTrue(result.path("content").asText().contains("HISTORICAL_EXCERPT_IN_EVIDENCE_AREA"));
+                    assertTrue(result.path("content").asText().contains("source_call_id=original"));
+                    assertFalse(result.path("content").asText().contains("STALE_OBSERVATION_BODY_OMITTED"));
+                }
                 return ModelResponse.finish("old=225; current requires fresh read");
             }, tools(restored, workspace, store), 6).resume(restored);
             assertEquals(AgentSession.Status.COMPLETED, restored.status());

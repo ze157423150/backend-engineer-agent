@@ -182,7 +182,8 @@ class ContextCompactorTest {
         var large = new SummaryNote(SummaryNote.Kind.PROGRESS, "s".repeat(600), "old-0", "x".repeat(400));
         assertThrows(IllegalArgumentException.class,
                 () -> compactor.validate(request, List.of(large,
-                        new SummaryNote(SummaryNote.Kind.PROGRESS, "t".repeat(600), "old-0", "x".repeat(400))), session));
+                        new SummaryNote(SummaryNote.Kind.PROGRESS, "t".repeat(600), "old-0", "x".repeat(400)),
+                        new SummaryNote(SummaryNote.Kind.PROGRESS, "u".repeat(600), "old-0", "x".repeat(400))), session));
         var tiny = new AgentSession("inspect");
         tiny.remember(exchange("tiny", 0, "evidence"));
         var tinyRequest = new SummaryRequest("inspect", null, 0, 1, 2000, tiny.history());

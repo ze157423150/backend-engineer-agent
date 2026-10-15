@@ -7,6 +7,22 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ConversationCompactorTest {
+    @Test void denseDialogueUsesASmallerCompletePrefixAndKeepsUncoveredTurnsRaw() throws Exception {
+        var session=sixTurns(2400);
+        var compactor=new ConversationCompactor(2048);
+        var request=compactor.plan(session);
+        assertNotNull(request);
+        assertTrue(request.toIndex()<4);
+        assertEquals(request.toIndex()*2,request.messages().size());
+        assertTrue(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(request.referenceData()).length()
+                <=ConversationCompactor.MAX_INPUT_CHARACTERS);
+        var note=new SummaryNote(SummaryNote.Kind.PROGRESS,"first user rule","turn-1-user","满100九折",SummarySection.CONSTRAINTS);
+        var accepted=compactor.validate(request,List.of(note),session);
+        session.installConversationSummary(accepted);
+        var view=new ContextAssembler().assemble(session,List.of(),10);
+        assertTrue(view.turns().stream().anyMatch(t->t.getTurnId()==request.toIndex()+1));
+        assertTrue(view.turns().stream().anyMatch(t->t.getTurnId()==7));
+    }
     private AgentSession sixTurns(int answerSize) {
         var session=new AgentSession("满100九折，保留输入校验");
         new AgentRuntime(request->ModelResponse.finish("第一轮说明"+"x".repeat(answerSize)),List.of(),20).run(session);
@@ -19,7 +35,7 @@ class ConversationCompactorTest {
         return session;
     }
     @Test void summarizesOnlyCompletedMiddleTurnsAndKeepsLatestUserRaw() {
-        var session=sixTurns(1000);var compactor=new ConversationCompactor(2048);var request=compactor.plan(session);
+        var session=sixTurns(900);var compactor=new ConversationCompactor(2048);var request=compactor.plan(session);
         assertEquals(0,request.fromIndex());assertEquals(4,request.toIndex());assertEquals(8,request.messages().size());
         var notes=List.of(new SummaryNote(SummaryNote.Kind.PROGRESS,"第1轮用户提出满100九折","turn-1-user","满100九折"),
                 new SummaryNote(SummaryNote.Kind.PROGRESS,"第4轮用户改为满200八折，并保留输入校验","turn-4-user","改成满200八折，保留输入校验"));
@@ -31,7 +47,7 @@ class ConversationCompactorTest {
         assertEquals(7,session.turns().size());assertNull(compactor.plan(session));
     }
     @Test void rejectsEditedQuoteAnswerAttributedToUserAndCurrentTurnSource() {
-        var session=sixTurns(1000);var compactor=new ConversationCompactor(2048);var request=compactor.plan(session);
+        var session=sixTurns(900);var compactor=new ConversationCompactor(2048);var request=compactor.plan(session);
         for(var note:List.of(new SummaryNote(SummaryNote.Kind.PROGRESS,"bad","turn-1-user","满100...九折"),
                 new SummaryNote(SummaryNote.Kind.PROGRESS,"bad","turn-1-user","第一轮说明"),
                 new SummaryNote(SummaryNote.Kind.PROGRESS,"bad","turn-7-user","回顾最初规则"))) {
@@ -45,7 +61,7 @@ class ConversationCompactorTest {
         int events=session.events().size();assertNull(new ConversationCompactor(2048).plan(session));assertEquals(events,session.events().size());
     }
     @Test void historyRetrievalShowsLaterMessagesWithoutDeclaringRequirementsInvalid() throws Exception {
-        var session=sixTurns(1000);
+        var session=sixTurns(900);
         var search=new SearchTurnsTool(session).execute(Map.of("keyword","满100","role","user","before_turn","0","limit","5"));
         assertTrue(search.successful());assertTrue(search.content().contains("turn-1-user"));
         var result=new ReadTurnTool(session).execute(Map.of("message_id","turn-1-user","start_line","1","end_line","5"));

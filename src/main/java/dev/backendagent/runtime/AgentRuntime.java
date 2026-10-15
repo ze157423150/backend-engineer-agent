@@ -311,7 +311,8 @@ public final class AgentRuntime {
             while (turn > 0 && latestStart > 0 && raw.get(latestStart - 1).modelCallNumber() == turn) { latestStart--; }
         }
         long minimumCharacters = initial.historyCharacters() - initial.contextProjection().getHistoryCharacters();
-        var filtered = StaleObservationFilter.filter(raw);
+        var filtered = StaleObservationFilter.filter(raw).stream()
+                .map(new ToolResultCompressor()::prune).toList();
         for (int i = latestStart; i < raw.size(); i++) { minimumCharacters += configuredHistoryBudget.measure(filtered.get(i)); }
         int minimumLimit = (int) Math.max(1, minimumCharacters);
         var minimumBudget = new ContextBudget(minimumLimit);

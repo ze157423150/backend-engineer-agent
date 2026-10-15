@@ -39,7 +39,7 @@ public final class ContextAssembler {
         if (summaryCost >= budget.getMaxHistoryCharacters()) {
             throw new IllegalStateException("Summary exceeds history budget; increase --max-history-chars");
         }
-        int version = 5;
+        int version = 6;
         var projection = new ContextAssembler(new ContextBudget(budget.getMaxHistoryCharacters() - summaryCost))
                 .project(session.history(), version, summary == null ? 0 : summary.getCoveredExchanges());
         // A retained original does not need its summary note repeated in the same request.
@@ -81,7 +81,11 @@ public final class ContextAssembler {
         boolean filterStale = policyVersion >= 2;
         var baseline = filterStale ? StaleObservationFilter.filter(raw) : raw;
         var history = new java.util.ArrayList<>(baseline);
-        long total = baseline.stream().mapToLong(budget::measure).sum();
+        if (policyVersion >= 6 && baseline.stream().mapToLong(budget::measure).sum() > budget.getMaxHistoryCharacters()) {
+            var pruner = new ToolResultCompressor();
+            for (int i = 0; i < history.size(); i++) { history.set(i, pruner.prune(history.get(i))); }
+        }
+        long total = history.stream().mapToLong(budget::measure).sum();
         int newestStart = raw.size();
         if (!raw.isEmpty()) {
             newestStart--;

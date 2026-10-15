@@ -23,14 +23,14 @@ class ContextProjectionTest {
     }
 
     @Test
-    void dropsWholeBatchUnderPressureAndKeepsRawMiddleRetrievable() {
+    void prunesLargeResultsBeforeDroppingBatchesAndKeepsOriginalRetrievable() {
         String raw = "HEADER\n" + "first\n".repeat(1800) + "MIDDLE_EVIDENCE\n" + "last\n".repeat(1800);
         var old = exchange("old", "read_file", 1, raw);
         var latest = exchange("latest", "read_file", 2, "current file");
         var session = session(old, latest);
         var projection = project(session, 6500);
-        assertEquals(1, projection.getOmittedExchanges());
-        assertEquals(0, projection.getCompressedExchanges());
+        assertEquals(0, projection.getOmittedExchanges());
+        assertEquals(1, projection.getCompressedExchanges());
         assertFalse(projection.getHistory().getFirst().result().content().contains("MIDDLE_EVIDENCE"));
         assertEquals(latest, projection.getHistory().getLast());
         assertEquals(raw, session.history().getFirst().result().content());
@@ -56,8 +56,11 @@ class ContextProjectionTest {
                 exchange("a", "read_file", 2, "a".repeat(10000)),
                 exchange("b", "search_code", 2, "b".repeat(10000)));
         var projection = project(session, 26000);
-        assertEquals(session.history().subList(1, 3), projection.getHistory().subList(0, 2));
-        assertThrows(IllegalStateException.class, () -> project(session, 15000));
+        assertEquals(List.of("old", "a", "b"), projection.getHistory().stream().map(e -> e.call().id()).toList());
+        assertEquals(3, projection.getCompressedExchanges());
+        assertEquals(3, project(session, 15000).getHistory().size());
+        assertThrows(IllegalStateException.class, () -> project(session, 8000));
+        projection.validateAgainst(session.history());
     }
 
     @Test

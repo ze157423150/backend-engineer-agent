@@ -48,12 +48,12 @@ class ContextWindowTest {
             session.installSummary(new ContextSummary(1, 15, List.of(note("r0"), note("r5"), note("r14"))));
             var view = new ContextAssembler(new ContextBudget(100000)).assemble(session, List.of(), 10);
             assertEquals(List.of("r12", "r13", "r14", "r15"), view.history().stream().map(exchange -> exchange.call().id()).toList());
-            assertEquals(List.of("r5"), view.contextSummary().getNotes().stream().map(SummaryNote::getSourceCallId).toList());
+            assertEquals(List.of("r0", "r5"), view.contextSummary().getNotes().stream().map(SummaryNote::getSourceCallId).toList());
             assertFalse(view.contextProjection().getRecoveryReferences().contains("call_id=r0,"));
             assertTrue(view.contextProjection().getRecoveryReferences().contains("call_id=r4,"));
-            assertEquals(5, view.contextProjection().getPolicyVersion());
+            assertEquals(6, view.contextProjection().getPolicyVersion());
             view.contextProjection().validateAgainst(session.history());
-            assertEquals(3, session.contextSummary().getNotes().size()); // Persistence is not rewritten by an age-filtered view.
+            assertEquals(3, session.contextSummary().getNotes().size()); // Valid older facts remain in the rolling checkpoint.
             assertTrue(session.originalObservation("r0").result().content().contains("evidence-r0"));
         }
     }
@@ -160,7 +160,7 @@ class ContextWindowTest {
                 var diskView = assembler.assemble(durable, List.of(), 10);
                 var memoryView = assembler.assemble(memory, List.of(), 10);
                 assertEquals(json.writeValueAsString(diskView), json.writeValueAsString(memoryView));
-                assertEquals(5, memoryView.contextProjection().getPolicyVersion());
+                assertEquals(6, memoryView.contextProjection().getPolicyVersion());
             }
             var summary = new ContextSummary(1, 15, List.of(note("a0"), note("a5"), note("a14")));
             durable.installSummary(summary);
