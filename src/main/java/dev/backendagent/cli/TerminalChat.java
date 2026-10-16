@@ -151,7 +151,6 @@ public final class TerminalChat {
         if (session.status() != AgentSession.Status.COMPLETED) {
             output.println("当前轮尚未完成；先检查失败原因或调整 /budget，再用 /resume 继续。新需求未添加。"); return;
         }
-        if (session.turns().size() >= 32) { output.println("已达到32轮上限，请退出并创建新会话。"); return; }
         if (session.modelCalls() >= maxModelCalls) { output.println("调用额度不足；先用 /budget N 提高累计上限，再重新输入需求。"); return; }
         execute(session, () -> runtimeFactory.apply(maxModelCalls).continueConversation(session, message));
     }

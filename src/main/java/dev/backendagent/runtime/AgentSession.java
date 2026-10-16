@@ -22,7 +22,8 @@ public final class AgentSession {
         WORKSPACE_REVISION_ADVANCED, TEST_RESULT_RECORDED,
         WORKING_MEMORY_LOADED, HISTORY_BODIES_ARCHIVED, HISTORICAL_EVIDENCE_UPDATED, WINDOW_SUMMARY_ATTEMPTED, WINDOW_SUMMARY_SKIPPED, SESSION_RESUMED, SESSION_COMPLETED, SESSION_FAILED, BUDGET_EXHAUSTED,
         TOOL_BATCH_STARTED, TOOL_BATCH_PROGRESS, TOOL_BATCH_COMPLETED, TOOL_CALL_RETRY_AUTHORIZED, TOOL_EXECUTION_STARTED,
-        NO_PROGRESS_WARNING, NO_PROGRESS_STOPPED, FINISH_REJECTED, MODEL_RESPONSE_NORMALIZED
+        NO_PROGRESS_WARNING, NO_PROGRESS_STOPPED, FINISH_REJECTED, MODEL_RESPONSE_NORMALIZED,
+        VERIFICATION_UPDATE_STARTED, VERIFICATION_BASES_UPDATED, VERIFICATION_UPDATE_FAILED, VERIFICATION_UPDATE_SKIPPED
     }
 
     public record Event(long sequence, EventType type, String detail) {}
@@ -52,6 +53,8 @@ public final class AgentSession {
     private boolean testToolAvailable;
     private dev.backendagent.verification.VerificationState verificationState = new dev.backendagent.verification.VerificationState();
     private dev.backendagent.tools.WorkspaceAccess verificationWorkspace;
+    private dev.backendagent.verification.VerificationLedger verificationLedger;
+    private java.util.Map<String,String> verificationHashes;
     private final SessionEventSink eventSink;
     private final dev.backendagent.history.ObservationArchive archive;
     public static final int RECENT_FULL_BATCHES = ContextWindowPolicy.RECENT_BATCHES + ContextWindowPolicy.SUMMARY_BATCHES;
@@ -100,6 +103,7 @@ public final class AgentSession {
         this.conversationSummary = checkpoint.getConversationSummary();
         this.failure = checkpoint.getFailure();
         this.pendingToolBatch = checkpoint.getPendingToolBatch();
+        this.verificationLedger = checkpoint.getVerificationLedger();
         this.inFlightRetryValidated = pendingToolBatch != null && pendingToolBatch.getPreExecutionHashes() != null
                 && pendingToolBatch.getPreExecutionHashes().equals(checkpoint.getWorkspaceHashes());
         this.staleEvidenceIds.addAll(checkpoint.getStaleEvidenceIds());
@@ -248,7 +252,6 @@ public final class AgentSession {
 
     void continueWith(String message) {
         if (status != Status.COMPLETED) throw new IllegalStateException("Only a completed turn accepts a new user message");
-        if (completedTurns.size() >= 31) throw new IllegalArgumentException("Conversation currently supports at most 32 turns");
         var next = new ConversationTurn(completedTurns.size() + 2, message, Status.RUNNING, null, history.size(), history.size());
         completedTurns.add(turns().getLast());
         currentUserMessage = next.getUserMessage();
@@ -339,15 +342,36 @@ public final class AgentSession {
     public WorkspaceState workspaceState() { return workspaceState; }
     public NoProgressReport noProgressReport() { return noProgressReport; }
     public dev.backendagent.verification.VerificationState verificationState() { return verificationState; }
+    public dev.backendagent.verification.VerificationLedger verificationLedger() { return verificationLedger; }
+    public boolean isAutomaticVerificationBasis(dev.backendagent.verification.ActiveVerificationBasis basis) {
+        var source=basis.source();
+        if(!dev.backendagent.verification.VerificationSources.isUpdateSource(source))return false;
+        return source.file()==null || history.stream().anyMatch(e->e.call().id().equals(source.id())
+                && e.call().name().equals("read_file") && e.result().successful());
+    }
+    public List<dev.backendagent.verification.VerificationSource> verificationSources(dev.backendagent.model.ModelRequest request) {
+        return dev.backendagent.verification.VerificationSources.visible(request).stream().map(source -> {
+            if(source.file()==null || !source.kind().equals("FILE"))return source;
+            String hash=verificationHashes==null?null:verificationHashes.get(source.file().getPath());
+            String currency=staleEvidenceIds.contains(source.id())?"STALE":verificationHashes==null?"UNKNOWN":
+                    source.file().getSha256().equals(hash)?"CURRENT":"STALE";
+            return new dev.backendagent.verification.VerificationSource(source.id(),source.kind(),source.turnId(),source.content(),source.file(),currency);
+        }).toList();
+    }
+    void installVerificationLedger(dev.backendagent.verification.VerificationLedger ledger) {
+        verificationLedger = ledger;
+        append(EventType.VERIFICATION_BASES_UPDATED,"turn="+ledger.turnId()+", bases="+ledger.bases().size(),ledger);
+    }
     public void bindVerificationWorkspace(dev.backendagent.tools.WorkspaceAccess workspace) {
         verificationWorkspace = java.util.Objects.requireNonNull(workspace);
     }
     public void refreshVerificationBasis() {
-        if (verificationState.bases().isEmpty()) { return; }
+        if (verificationState.bases().isEmpty() && verificationLedger == null) { return; }
         java.util.Map<String,String> hashes = null;
         try { if (verificationWorkspace != null) hashes = verificationWorkspace.checkpointHashes(); }
         catch (java.io.IOException unavailable) { /* Unknown currency must not authorize registration. */ }
         verificationState.refresh(hashes, staleEvidenceIds);
+        verificationHashes = hashes;
     }
     public int completionRejections() {
         String prefix = "turn=" + turns().size() + ";";
@@ -367,7 +391,17 @@ public final class AgentSession {
     }
     public dev.backendagent.verification.VerificationContext verificationContext() {
         var view = new dev.backendagent.verification.VerificationContext(turns().size(), verificationState,
-                completionRejections(), new dev.backendagent.verification.CompletionVerifier().rejection(this), latestVerificationTest());
+                completionRejections(), new dev.backendagent.verification.CompletionVerifier().rejection(this), latestVerificationTest(),
+                verificationLedger == null ? List.of() : verificationLedger.bases());
+        return view.isEmpty() ? null : view;
+    }
+    dev.backendagent.verification.VerificationContext verificationContext(dev.backendagent.model.ModelRequest request) {
+        var visible=dev.backendagent.verification.VerificationSources.visible(request);
+        var active = dev.backendagent.verification.VerificationSources.project(verificationLedger,
+                visible, verificationHashes, staleEvidenceIds).stream().filter(this::isAutomaticVerificationBasis).toList();
+        var view = new dev.backendagent.verification.VerificationContext(turns().size(), verificationState,
+                completionRejections(), new dev.backendagent.verification.CompletionVerifier().rejection(this), latestVerificationTest(),active)
+                .filterStaleRegistrations(visible);
         return view.isEmpty() ? null : view;
     }
     void setNoProgressReport(NoProgressReport report) { noProgressReport = report; }

@@ -134,6 +134,7 @@ public final class AgentRuntime {
                 int callsBeforeCompaction = session.modelCalls();
                 compactIfNeeded(session, prepared.historyBudget());
                 if (session.modelCalls() != callsBeforeCompaction) { prepared = prepareContext(session); }
+                if (updateVerificationBasisIfNeeded(session,prepared.request())) prepared=prepareContext(session);
                 var context = prepared.request();
                 if (prepared.report() != null) {
                     var report = prepared.report();
@@ -202,6 +203,53 @@ public final class AgentRuntime {
         } catch (RuntimeException failure) {
             session.fail(failure, completeToolBatch);
         }
+    }
+
+    /** One automatic refresh per changed relevant input; failures never erase the original task evidence. */
+    private boolean updateVerificationBasisIfNeeded(AgentSession session,dev.backendagent.model.ModelRequest context) {
+        if(!model.supportsVerificationUpdates() || !tools.containsKey("pin_verification_basis"))return false;
+        var visible=session.verificationSources(context);
+        var previous=context.verificationContext()==null?List.<dev.backendagent.verification.ActiveVerificationBasis>of():
+                context.verificationContext().activeBases().stream().filter(session::isAutomaticVerificationBasis).toList();
+        var selected=dev.backendagent.verification.VerificationSources.updateSources(visible,session.turns().size(),
+                session.turns().getLast().getUserMessage(),previous);
+        var request=new dev.backendagent.model.VerificationUpdateRequest(session.turns().size(),selected,previous);
+        var ledger=session.verificationLedger();
+        if(ledger!=null && ledger.turnId()==request.turnId() && ledger.attemptedDigest().equals(request.digest()))return false;
+        if(maxModelCalls-session.modelCalls()<2) {
+            session.append(VERIFICATION_UPDATE_SKIPPED,"Insufficient call budget; reserve the task call");
+            return false;
+        }
+        // Save the attempt key first so a malformed response cannot cause an unbounded retry loop.
+        session.installVerificationLedger(new dev.backendagent.verification.VerificationLedger(request.turnId(),request.digest(),previous));
+        session.countModelCall();
+        session.append(VERIFICATION_UPDATE_STARTED,"turn="+request.turnId()+", sources="+selected.size());
+        session.checkpoint();
+        try {
+            var updated=request.validate(model.updateVerificationBasis(request));
+            var candidate=new dev.backendagent.verification.VerificationContext(request.turnId(),session.verificationState(),
+                    session.completionRejections(),context.verificationContext()==null?null:context.verificationContext().getCompletionIssue(),
+                    session.latestVerificationTest(),updated);
+            long protectedCharacters=candidate.characterCount()+session.historicalEvidenceCharacters()
+                    +(context.contextSummary()==null?0:context.contextSummary().characterCount())
+                    +(context.conversationSummary()==null?0:context.conversationSummary().characterCount());
+            var report=model.inspectRequest(context.withVerificationContext(candidate));
+            if(protectedCharacters>=configuredHistoryBudget.getMaxHistoryCharacters() || report!=null&&!report.isWithinBudget())
+                throw new IllegalArgumentException("Verification basis does not fit the task request");
+            session.installVerificationLedger(new dev.backendagent.verification.VerificationLedger(request.turnId(),request.digest(),updated));
+        } catch(PersistenceException failure) { throw failure; }
+        catch(RuntimeException invalid) {
+            if(Thread.currentThread().isInterrupted())throw invalid;
+            // Do not persist provider responses, secrets or fabricated quotations in failure diagnostics.
+            var uncertain=previous.stream().map(b->b.status().equals("AVAILABLE")?
+                    new dev.backendagent.verification.ActiveVerificationBasis(b.source(),b.quote(),"UNVERIFIED",
+                            "自动更新未完成，请按本轮用户要求核实是否仍适用",null,null):b).toList();
+            session.installVerificationLedger(new dev.backendagent.verification.VerificationLedger(request.turnId(),request.digest(),uncertain));
+            session.append(VERIFICATION_UPDATE_FAILED,"Automatic basis refresh rejected; original context remains authoritative");
+            progress.accept("本轮依据更新未通过校验，继续使用原始需求与工具证据。");
+        }
+        session.checkpoint();
+        return true;
     }
 
     /** Retries one unchanged task request; no compaction or tool execution occurs between attempts. */

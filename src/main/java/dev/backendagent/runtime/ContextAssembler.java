@@ -51,7 +51,7 @@ public final class ContextAssembler {
             visibleSummary = notes.isEmpty() ? null : new ContextSummary(visibleSummary.getRevision(),
                     visibleSummary.getCoveredExchanges(), notes);
         }
-        return new ModelRequest(session.objective(), projection.getHistory(), tools, remainingCalls,
+        var request = new ModelRequest(session.objective(), projection.getHistory(), tools, remainingCalls,
                 projection.getOmittedExchanges(), projection.getHistoryCharacters() + summaryCost,
                 session.memoryFacts().stream().filter(fact -> !stale.contains(fact.getSourceCallId())).toList(), projection,
                 visibleSummary, summary == null ? java.util.Set.of() : summary.getNotes().stream()
@@ -62,6 +62,7 @@ public final class ContextAssembler {
                             turn.getStatus() == AgentSession.Status.COMPLETED ? AgentSession.Status.COMPLETED : AgentSession.Status.RUNNING,
                             turn.getAnswer(), turn.getStartHistoryIndex(), turn.getEndHistoryIndex())).toList(),visibleDialogue,session.turns().size())
                 .withNoProgressReport(session.noProgressReport()).withVerificationContext(verification);
+        return request.withVerificationContext(session.verificationContext(request));
     }
 
     ContextProjection project(List<dev.backendagent.model.ToolExchange> raw) {

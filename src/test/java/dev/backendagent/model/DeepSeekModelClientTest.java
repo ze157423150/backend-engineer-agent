@@ -55,16 +55,68 @@ class DeepSeekModelClientTest {
                 "testExecution=EXECUTED\ntestsExecuted=1\n[ERROR] TaxTest.amount:12 expected: <180> but was: <1800>");
         var view=new dev.backendagent.verification.VerificationContext(1,state,1,"test failed",failure);
         var request=new ModelRequest("repair",List.of(),List.of(),2).withVerificationContext(view).withNoProgressReport(null);
-        JsonNode data=null;
+        JsonNode data=null,validation=null;
         for(var message:client(Duration.ofSeconds(5)).buildRequest(request).path("messages")){
             if(!message.path("role").asText().equals("user"))continue;
             var content=message.path("content").asText();if(!content.startsWith("{"))continue;
             var block=json.readTree(content);if(block.path("kind").asText().equals("current_turn_verification"))data=block.path("data");
+            if(block.path("kind").asText().equals("workspace_validation_state"))validation=block;
         }
         assertNotNull(data);assertEquals("CURRENT",data.path("bases").get(0).path("validity").asText());
         assertFalse(data.has("expectations"));
-        assertEquals(1,data.path("completionRejections").asInt());
-        assertEquals("1800",data.path("latestTest").path("failures").get(0).path("actual").asText());
+        assertFalse(data.has("latestTest"));assertFalse(data.has("completionRejections"));
+        assertNotNull(validation);assertEquals(1,validation.path("completionRejections").asInt());
+        assertEquals("1800",validation.path("testDiagnostics").path("failures").get(0).path("actual").asText());
+    }
+    @Test void automaticBasisProtocolIncludesCurrentUserAndRequiresExactQuotesAndLaterUserReplacement() throws Exception {
+        var old=new dev.backendagent.verification.VerificationSource("turn-4-user","USER",4,"仅统计5xx",null,"CURRENT");
+        var current=new dev.backendagent.verification.VerificationSource("turn-5-user","USER",5,"统计4xx和5xx，排除429；429仍计入4xx桶",null,"CURRENT");
+        var input=new VerificationUpdateRequest(5,List.of(old,current),List.of());
+        responses.add(finalResponse("{\"bases\":[{\"source\":\"turn-5-user\",\"quote\":\"429仍计入4xx桶\",\"status\":\"AVAILABLE\",\"reason\":\"\"},{\"source\":\"turn-4-user\",\"quote\":\"仅统计5xx\",\"status\":\"SUPERSEDED\",\"reason\":\"用户已改变统计范围\",\"replacedBy\":\"turn-5-user\",\"replacementQuote\":\"统计4xx和5xx，排除429\"}]}"));
+        var output=client(Duration.ofSeconds(5)).updateVerificationBasis(input);
+        assertEquals(2,output.size());assertEquals("SUPERSEDED",output.get(1).status());
+        var request=requests.getLast();assertFalse(request.has("tools"));
+        var payload=json.readTree(request.path("messages").get(1).path("content").asText());
+        assertEquals(5,payload.path("currentTask").path("turn").asInt());assertEquals(1,payload.path("history").size());
+        assertEquals(4,payload.size());assertTrue(payload.has("previousBasis"));assertTrue(payload.has("contracts"));
+        assertFalse(payload.toString().contains("currency"));assertFalse(payload.toString().contains("sha256"));
+        responses.add(finalResponse("{\"bases\":[{\"source\":\"turn-5-user\",\"quote\":\"429不计入4xx桶\",\"status\":\"AVAILABLE\",\"reason\":\"\"}]}"));
+        assertThrows(IllegalArgumentException.class,()->client(Duration.ofSeconds(5)).updateVerificationBasis(input));
+    }
+    @Test void previousBasisCanBeReturnedUnchangedWithoutLeakingSourceMetadata() throws Exception {
+        var old=new dev.backendagent.verification.VerificationSource("turn-1-user","USER",1,"仅统计5xx",null,"CURRENT");
+        var replacement=new dev.backendagent.verification.VerificationSource("turn-2-user","USER",2,"统计4xx和5xx，排除429",null,"CURRENT");
+        var current=new dev.backendagent.verification.VerificationSource("turn-3-user","USER",3,"审计历史规则",null,"CURRENT");
+        var doc=new dev.backendagent.verification.VerificationSource("read-doc","FILE",1,"429仍计入4xx桶",new FileFingerprint("docs/policy.md","1".repeat(64)),"CURRENT");
+        var previous=List.of(
+                new dev.backendagent.verification.ActiveVerificationBasis(doc,doc.content(),"AVAILABLE","",null,null),
+                new dev.backendagent.verification.ActiveVerificationBasis(old,old.content(),"SUPERSEDED","",replacement,replacement.content()));
+        var input=new VerificationUpdateRequest(3,List.of(current,doc),previous);
+        var data=input.referenceData();
+        var allowed=java.util.Set.of("source","quote","status","reason","replacedBy","replacementQuote");
+        for(var item:data.path("previousBasis"))item.fieldNames().forEachRemaining(name->assertTrue(allowed.contains(name),name));
+        assertEquals("docs/policy.md",data.path("contracts").get(0).path("path").asText());
+        assertEquals("turn-2-user",data.path("history").get(0).path("source").asText());
+        assertEquals(replacement.content(),data.path("previousBasis").get(1).path("replacementQuote").asText());
+        var echoed=json.createObjectNode();echoed.set("bases",data.path("previousBasis"));
+        responses.add(finalResponse(echoed.toString()));
+        assertEquals(previous,client(Duration.ofSeconds(5)).updateVerificationBasis(input));
+        var prompt=requests.getLast().path("messages").get(0).path("content").asText();
+        assertTrue(prompt.contains("返回完整更新列表"));
+    }
+    @Test void systemPromptExplainsBasisRolesAndKeepsExecutionDiagnosticsSeparate() throws Exception {
+        var body=client(Duration.ofSeconds(5)).buildRequest(new ModelRequest("repair",List.of(),List.of(),2));
+        String prompt=body.path("messages").get(0).path("content").asText();
+        assertTrue(prompt.contains("每轮自动更新"));assertTrue(prompt.contains("SUPERSEDED/STALE只作历史提醒"));
+        assertTrue(prompt.contains("workspace_validation_state保存当前测试状态及诊断"));
+    }
+    @Test void ordinaryVerificationBasisDoesNotRequireExplanatoryReason() throws Exception {
+        var source=new dev.backendagent.verification.VerificationSource("turn-1-user","USER",1,"429仍计入4xx桶",null,"CURRENT");
+        responses.add(finalResponse("{\"bases\":[{\"source\":\"turn-1-user\",\"quote\":\"429仍计入4xx桶\",\"status\":\"AVAILABLE\"}]}"));
+        var bases=client(Duration.ofSeconds(5)).updateVerificationBasis(new VerificationUpdateRequest(1,List.of(source),List.of()));
+        assertEquals("",bases.getFirst().reason());
+        var data=json.readTree(requests.getLast().path("messages").get(1).path("content").asText());
+        assertEquals(4,data.size());assertFalse(data.toString().contains("CURRENT"));
     }
     @Test void rawFormatIsOptionalAndFlowsThroughProtocolToWorkspace() throws Exception {
         responses.add(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":1,\"end_line\":20,\"format\":\"raw\"}"));

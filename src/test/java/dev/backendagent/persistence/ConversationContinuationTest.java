@@ -77,6 +77,35 @@ class ConversationContinuationTest {
             assertEquals(1, session.events().stream().filter(e -> e.type()==AgentSession.EventType.USER_TURN_STARTED).count());
         }
     }
+    @Test void savesRestoresAndContinuesBeyondThirtyTwoTurns() throws Exception {
+        UUID id;
+        try(var store=new FileSessionStore(root.resolve("sessions"))) {
+            store.bindWorkspace(workspace());
+            var session=new AgentSession("round-1",store);store.create(session);id=session.id();
+            var runtime=new AgentRuntime(request->ModelResponse.finish(request.turns().getLast().getUserMessage()),List.of(),100);
+            runtime.run(session);
+            for(int turn=2;turn<=40;turn++)runtime.continueConversation(session,"round-"+turn);
+            store.saveSnapshot(session);
+        }
+        try(var store=new FileSessionStore(root.resolve("sessions"))) {
+            var session=store.openCompleted(id,workspace(),100);
+            assertEquals(40,session.turns().size());assertEquals("round-40",session.answer());
+            var runtime=new AgentRuntime(request->ModelResponse.finish(request.turns().getLast().getUserMessage()),List.of(),100);
+            for(int turn=41;turn<=65;turn++)runtime.continueConversation(session,"round-"+turn);
+            store.saveSnapshot(session);
+        }
+        try(var store=new FileSessionStore(root.resolve("sessions"))) {
+            var session=store.openCompleted(id,workspace(),100);
+            assertEquals(65,session.turns().size());assertEquals(65,session.modelCalls());
+            assertEquals(64,session.events().stream().filter(e->e.type()==AgentSession.EventType.USER_TURN_STARTED).count());
+            for(int turn=1;turn<=65;turn++) {
+                var actual=session.turns().get(turn-1);
+                assertEquals(turn,actual.getTurnId());assertEquals("round-"+turn,actual.getUserMessage());
+                assertEquals("round-"+turn,actual.getAnswer());assertEquals(AgentSession.Status.COMPLETED,actual.getStatus());
+            }
+        }
+    }
+
     @Test void alteredUserMessageIsRejectedBeforeContinuation() throws Exception {
         var id = firstTurn();
         try (var store = new FileSessionStore(root.resolve("sessions"))) {

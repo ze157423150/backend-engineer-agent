@@ -240,6 +240,8 @@ public final class RealModelEvaluation {
                 return client.execute(actual(request));
             }
             public boolean supportsSummarization() { return !full; }
+            public boolean supportsVerificationUpdates() { return client.supportsVerificationUpdates(); }
+            public java.util.List<dev.backendagent.verification.ActiveVerificationBasis> updateVerificationBasis(VerificationUpdateRequest request) { return client.updateVerificationBasis(request); }
             public boolean supportsSummaryRefinement() { return !full && client.supportsSummaryRefinement(); }
             public List<SummaryNote> refineSummary(SummaryRefinementRequest request) {
                 return client.refineSummary(request);

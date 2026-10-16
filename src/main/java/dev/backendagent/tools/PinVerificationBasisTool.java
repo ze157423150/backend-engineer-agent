@@ -9,8 +9,8 @@ public final class PinVerificationBasisTool implements Tool {
     private final AgentSession session;private final WorkspaceAccess workspace;
     public PinVerificationBasisTool(AgentSession session,WorkspaceAccess workspace){this.session=session;this.workspace=workspace;session.bindVerificationWorkspace(workspace);}
     public String name(){return "pin_verification_basis";}
-    public ToolDefinition definition(){return new ToolDefinition(name(),"固定本轮测试所需契约原文，仅接受本会话成功read_file已展示的完整片段。"
-            +"来源与当前文件指纹必须一致。最多8份、合计6000字符；同ID更新会替换旧依据。新用户轮次需重新选择依据。",
+    public ToolDefinition definition(){return new ToolDefinition(name(),"补充本轮自动依据区尚未集中展示的契约原文，已有有效依据无需重复登记。仅接受本会话成功read_file已展示的完整片段。"
+            +"来源与当前文件指纹必须一致。补充登记最多8份、合计6000字符；同ID更新会替换旧依据。新用户轮次清空补充登记并自动重评依据。",
             Map.of("basis_id","本轮依据标识，字母数字下划线横线，最多64字符","source_call_id","本会话成功read_file的调用ID",
                     "start_line","实际源文件起始行，不是工具结果行号","end_line","结束行，最多100行、1600字符"));}
     public ToolResult execute(Map<String,String> args){
@@ -20,6 +20,8 @@ public final class PinVerificationBasisTool implements Tool {
             if(!source.call().name().equals("read_file")||!result.successful()||result.fileFingerprint()==null||metadata==null
                     ||!metadata.isBodyComplete()||session.staleEvidenceIds().contains(source.call().id()))
                 return new ToolResult(false,"依据必须来自成功且未过期的完整read_file片段；请重新读取契约");
+            if(!VerificationSources.isContractDocument(result.fileFingerprint().getPath()))
+                return new ToolResult(false,"仅补充需求说明或契约规范原文；源码、构建配置和测试断言不作为正确期望的依据");
             int start=Integer.parseInt(args.get("start_line")),end=Integer.parseInt(args.get("end_line"));
             if(start<metadata.getStartLine()||end>metadata.getEndLine()||start>end||end-start>=100)
                 return new ToolResult(false,"所选行必须位于已读取范围内，最多100行");

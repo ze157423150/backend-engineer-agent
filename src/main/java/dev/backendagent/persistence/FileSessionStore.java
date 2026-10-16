@@ -164,7 +164,7 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
                     session.staleEvidenceIds(), workspace.rootPath(), hashes,
                     workspace.originalContents(), workspace.createdFilePaths(), session.contextProjection(), session.contextSummary(),
                     session.workspaceState(), session.historicalEvidence(), session.turns(), session.conversationSummary(),
-                    session.failure(), session.pendingToolBatch());
+                    session.failure(), session.pendingToolBatch(), session.verificationLedger());
             Path target = sessionDirectory(session.id()).resolve("checkpoint.json");
             if (Files.isSymbolicLink(target)) { throw new IOException("Symlink checkpoint"); }
             temporary = Files.createTempFile(sessionDirectory(session.id()), ".checkpoint-", ".tmp");
@@ -299,6 +299,10 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
             if(!lastDialogueSummary.equals(json.valueToTree(checkpoint.getConversationSummary()))) {
                 throw new IOException("Conversation summary disagrees with event log");
             }
+            com.fasterxml.jackson.databind.JsonNode lastVerificationLedger = json.nullNode();
+            for(var event:events) if(event.path("type").asText().equals("VERIFICATION_BASES_UPDATED")) lastVerificationLedger=event.path("payload");
+            if(!lastVerificationLedger.equals(json.valueToTree(checkpoint.getVerificationLedger())))
+                throw new IOException("Verification basis state disagrees with event log");
             var recordedEvents = new java.util.ArrayList<AgentSession.Event>();
             for (var event : events) {
                 recordedEvents.add(new AgentSession.Event(event.path("sequence").asLong(),

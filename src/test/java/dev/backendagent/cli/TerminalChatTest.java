@@ -70,6 +70,22 @@ class TerminalChatTest {
         assertFalse(text.toString().contains("MODEL_CALL_STARTED"));
     }
 
+    @Test void acceptsFollowUpsBeyondThirtyTwoTurnsInTheSameSession() throws Exception {
+        var session=new AgentSession("round-1");
+        var commands=new StringBuilder();
+        for(int turn=2;turn<=65;turn++)commands.append("round-").append(turn).append('\n');
+        commands.append("/exit\n");
+        chat(commands.toString(),100,request->ModelResponse.finish(request.turns().getLast().getUserMessage()))
+                .run(session,null,false);
+        assertEquals(AgentSession.Status.COMPLETED,session.status());
+        assertEquals(65,session.turns().size());assertEquals(65,session.modelCalls());
+        assertEquals(65,saves.get());assertEquals("round-65",session.answer());
+        for(int turn=1;turn<=65;turn++) {
+            var actual=session.turns().get(turn-1);
+            assertEquals(turn,actual.getTurnId());assertEquals("round-"+turn,actual.getUserMessage());
+        }
+    }
+
     @Test void eofAndExitBeforeFirstTaskCreateNoMessage() throws Exception {
         assertNull(TerminalChat.readFirstMessage(input(""), output()));
         assertNull(TerminalChat.readFirstMessage(input("/exit\n"), output()));

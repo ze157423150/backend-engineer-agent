@@ -3,6 +3,10 @@ package dev.backendagent.model;
 @FunctionalInterface
 public interface ModelClient {
     ModelResponse execute(ModelRequest request);
+    default boolean supportsVerificationUpdates() { return false; }
+    default java.util.List<dev.backendagent.verification.ActiveVerificationBasis> updateVerificationBasis(VerificationUpdateRequest request) {
+        throw new UnsupportedOperationException("Automatic verification basis updates are not supported");
+    }
     default RequestBudgetReport inspectRequest(ModelRequest request) { return null; }
     default boolean supportsConversationSummarization() { return false; }
     default java.util.List<dev.backendagent.runtime.SummaryNote> summarizeConversation(ConversationSummaryRequest request) {

@@ -22,6 +22,7 @@ public final class SessionCheckpoint {
     private final ContextProjection contextProjection;
     private final ContextSummary contextSummary;
     private final WorkspaceState workspaceState;
+    private final dev.backendagent.verification.VerificationLedger verificationLedger;
     private final int schemaVersion;
     private final UUID sessionId;
     private final String objective;
@@ -107,6 +108,21 @@ public final class SessionCheckpoint {
                 contextSummary,workspaceState,historicalEvidence,turns,conversationSummary,failure,null);
     }
 
+    public SessionCheckpoint(int schemaVersion, UUID sessionId, String objective, AgentSession.Status status,
+            int modelCalls, long lastEventSequence, List<ToolExchange> history, List<MemoryFact> workingMemory,
+            Set<String> staleEvidenceIds, String workspacePath, Map<String,String> workspaceHashes,
+            Map<String,String> originalContents, Set<String> createdFiles, ContextProjection contextProjection,
+            ContextSummary contextSummary, WorkspaceState workspaceState,
+            List<dev.backendagent.history.HistoricalEvidence> historicalEvidence,
+            List<dev.backendagent.runtime.ConversationTurn> turns,
+            dev.backendagent.runtime.ConversationSummary conversationSummary,
+            dev.backendagent.runtime.SessionFailure failure,
+            dev.backendagent.runtime.PendingToolBatch pendingToolBatch) {
+        this(schemaVersion,sessionId,objective,status,modelCalls,lastEventSequence,history,workingMemory,
+                staleEvidenceIds,workspacePath,workspaceHashes,originalContents,createdFiles,contextProjection,
+                contextSummary,workspaceState,historicalEvidence,turns,conversationSummary,failure,pendingToolBatch,null);
+    }
+
     @JsonCreator
     public SessionCheckpoint(@JsonProperty("schemaVersion") int schemaVersion,
             @JsonProperty("sessionId") UUID sessionId, @JsonProperty("objective") String objective,
@@ -126,11 +142,13 @@ public final class SessionCheckpoint {
             @JsonProperty("turns") List<dev.backendagent.runtime.ConversationTurn> turns,
             @JsonProperty("conversationSummary") dev.backendagent.runtime.ConversationSummary conversationSummary,
             @JsonProperty("failure") dev.backendagent.runtime.SessionFailure failure,
-            @JsonProperty("pendingToolBatch") dev.backendagent.runtime.PendingToolBatch pendingToolBatch) {
+            @JsonProperty("pendingToolBatch") dev.backendagent.runtime.PendingToolBatch pendingToolBatch,
+            @JsonProperty("verificationLedger") dev.backendagent.verification.VerificationLedger verificationLedger) {
         if ((schemaVersion != 1 && schemaVersion != 2 && schemaVersion != 3) || sessionId == null || objective == null || objective.isBlank()
                 || status == null || modelCalls < 0 || lastEventSequence < 0 || workspacePath == null) {
             throw new IllegalArgumentException("Invalid checkpoint metadata");
         }
+        this.verificationLedger=verificationLedger;
         this.conversationSummary=conversationSummary;
         this.failure=failure;
         this.pendingToolBatch=pendingToolBatch;
@@ -154,6 +172,7 @@ public final class SessionCheckpoint {
         this.createdFiles = Set.copyOf(createdFiles);
     }
 
+    public dev.backendagent.verification.VerificationLedger getVerificationLedger() { return verificationLedger; }
     public dev.backendagent.runtime.SessionFailure getFailure() { return failure; }
     public dev.backendagent.runtime.PendingToolBatch getPendingToolBatch() { return pendingToolBatch; }
     public dev.backendagent.runtime.ConversationSummary getConversationSummary() { return conversationSummary; }
