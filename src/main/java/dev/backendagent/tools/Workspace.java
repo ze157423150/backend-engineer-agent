@@ -360,7 +360,9 @@ public final class Workspace implements WorkspaceAccess {
             Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             originals.putIfAbsent(file, before);
             return new ToolResult(true, "file=" + relative(file)
-                    + "\n已完成一次精确替换。补丁数=" + edits.size() + "，均基于同一版本验证、一次原子写入。请用 workspace_diff 检查改动；尚未运行编译或测试。");
+                    + "\n已完成一次精确替换。补丁数=" + edits.size() + "，均基于同一版本验证、一次原子写入。"
+                    + "指纹对应本次写入后的完整文件；可复用仍可见的new_text片段，其他内容需按需读取。尚未运行编译或测试。",
+                    fingerprint(file, bytes));
         } catch (IOException | IllegalArgumentException failure) {
             return failure("补丁未应用：检查相对路径、文本编码、文件权限和原子写入支持；禁止密钥、隐藏路径和符号链接");
         } finally {

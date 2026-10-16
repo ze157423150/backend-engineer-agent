@@ -7,12 +7,13 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ConversationCompactorTest {
-    @Test void denseDialogueUsesASmallerCompletePrefixAndKeepsUncoveredTurnsRaw() throws Exception {
+    @Test void denseDialogueCanExceedFourThousandInputCharacters() throws Exception {
         var session=sixTurns(2400);
         var compactor=new ConversationCompactor(2048);
         var request=compactor.plan(session);
         assertNotNull(request);
-        assertTrue(request.toIndex()<4);
+        assertEquals(4,request.toIndex());
+        assertTrue(request.messages().stream().mapToInt(m->m.content().length()).sum()>4000);
         assertEquals(request.toIndex()*2,request.messages().size());
         assertTrue(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(request.referenceData()).length()
                 <=ConversationCompactor.MAX_INPUT_CHARACTERS);
@@ -20,8 +21,88 @@ class ConversationCompactorTest {
         var accepted=compactor.validate(request,List.of(note),session);
         session.installConversationSummary(accepted);
         var view=new ContextAssembler().assemble(session,List.of(),10);
-        assertTrue(view.turns().stream().anyMatch(t->t.getTurnId()==request.toIndex()+1));
+        assertTrue(view.turns().stream().anyMatch(t->t.getTurnId()==5));
         assertTrue(view.turns().stream().anyMatch(t->t.getTurnId()==7));
+    }
+    @Test void denseDialogueStillHonorsEncodedCapAndKeepsWholePairs() throws Exception {
+        String details=java.util.stream.IntStream.range(0,800).mapToObj(i->"字段"+i+";")
+                .collect(java.util.stream.Collectors.joining());
+        var session=new AgentSession("目标"+details);
+        for(int i=1;i<=10;i++) {
+            var runtime=new AgentRuntime(r->ModelResponse.finish("结果"+details),List.of(),30);
+            if(i==1)runtime.run(session);else runtime.continueConversation(session,"需求"+i+details);
+        }
+        session.continueWith("当前任务");
+        var request=new ConversationCompactor(2048).plan(session);
+        assertNotNull(request);
+        assertTrue(request.toIndex()<8);
+        assertEquals(request.toIndex()*2,request.messages().size());
+        assertTrue(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(request.referenceData()).length()
+                <=ConversationCompactor.MAX_INPUT_CHARACTERS);
+        assertEquals(11,new ContextAssembler().assemble(session,List.of(),10).turns().size());
+    }
+    @Test void expandedInputCanAdvancePastPreviouslyRejectedSmallPrefix() {
+        var session=sixTurns(2400);
+        session.append(AgentSession.EventType.CONVERSATION_SUMMARY_ATTEMPTED,"2");
+        for(int i=0;i<2;i++) {
+            session.finish("next");session.transitionTo(AgentSession.Status.COMPLETED);
+            session.continueWith("继续");
+        }
+        var request=new ConversationCompactor(2048).plan(session);
+        assertNotNull(request);
+        assertTrue(request.toIndex()>2);
+        assertNull(session.conversationSummary());
+    }
+    @Test void conversationSummaryInstallationShrinksToolHistoryWithoutMutatingCandidateState() {
+        var session=sixTurns(1000);
+        for(int i=0;i<3;i++) session.remember(new ToolExchange(new ToolCall("read-"+i,"read_file",Map.of("path","Main.java")),
+                new ToolResult(true,"x".repeat(3000)),null,20+i));
+        var original=session.history();
+        var shrunkCandidate=new java.util.concurrent.atomic.AtomicBoolean();
+        ModelClient model=new ModelClient() {
+            public boolean supportsConversationSummarization(){return true;}
+            public List<SummaryNote> summarizeConversation(ConversationSummaryRequest request) {
+                return List.of(new SummaryNote(SummaryNote.Kind.PROGRESS,"第1轮要求满100九折","turn-1-user","满100九折"));
+            }
+            public RequestBudgetReport inspectRequest(ModelRequest request) {
+                if(request.conversationSummary()!=null && session.conversationSummary()==null && request.history().size()<3)
+                    shrunkCandidate.set(true);
+                return new RequestBudgetReport(1000+request.historyCharacters(),500,500,9000);
+            }
+            public ModelResponse execute(ModelRequest request) {
+                assertNotNull(request.conversationSummary());
+                assertTrue(inspectRequest(request).isWithinBudget());
+                assertTrue(request.history().size()<3);
+                return ModelResponse.finish("done");
+            }
+        };
+        // sixTurns leaves an active turn ready for the loop.
+        session.transitionTo(AgentSession.Status.BUDGET_EXHAUSTED);
+        new AgentRuntime(model,List.of(),30,new ContextBudget(20000)).resume(session);
+        assertEquals(AgentSession.Status.COMPLETED,session.status());
+        assertNotNull(session.conversationSummary());assertTrue(shrunkCandidate.get());
+        assertEquals(original,session.history());
+    }
+    @Test void conversationSummaryThatCannotFitEvenAfterShrinkingIsNotInstalled() {
+        var session=sixTurns(1000);
+        ModelClient model=new ModelClient() {
+            public boolean supportsConversationSummarization(){return true;}
+            public List<SummaryNote> summarizeConversation(ConversationSummaryRequest request) {
+                return List.of(new SummaryNote(SummaryNote.Kind.PROGRESS,"第1轮要求满100九折","turn-1-user","满100九折"));
+            }
+            public RequestBudgetReport inspectRequest(ModelRequest request) {
+                return new RequestBudgetReport(request.conversationSummary()==null?1000:100000,500,500,9000);
+            }
+            public ModelResponse execute(ModelRequest request) {
+                assertNull(request.conversationSummary());assertEquals(7,request.turns().size());
+                return ModelResponse.finish("continued");
+            }
+        };
+        session.transitionTo(AgentSession.Status.BUDGET_EXHAUSTED);
+        new AgentRuntime(model,List.of(),30,new ContextBudget(20000)).resume(session);
+        assertEquals(AgentSession.Status.COMPLETED,session.status());assertNull(session.conversationSummary());
+        assertTrue(session.events().stream().anyMatch(e->e.type()==AgentSession.EventType.CONVERSATION_COMPACTION_FAILED
+                &&e.detail().contains("REQUEST_BUDGET_CHECK_FAILED")));
     }
     private AgentSession sixTurns(int answerSize) {
         var session=new AgentSession("满100九折，保留输入校验");

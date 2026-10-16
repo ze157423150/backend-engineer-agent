@@ -51,7 +51,7 @@ class PatchLoopTest {
     }
 
     @Test
-    void requiresFreshReadBeforeEachPatchAndFailedPatchPreservesMemory() throws IOException {
+    void requiresValidSourceAndAllowsSuccessfulPatchReuseWhileFailedPatchPreservesMemory() throws IOException {
         Files.writeString(root.resolve("Main.java"), "class Main { int n = 1; }\n");
         var workspace = new Workspace(root, root.resolve("agent-local.properties"));
         var session = new AgentSession("modify");
@@ -70,12 +70,13 @@ class PatchLoopTest {
                     return patch("good", "n = 1", "n = 2");
                 case 5: return patch("without-reread", "n = 2", "n = 3");
                 default:
-                    assertFalse(request.history().getLast().result().successful());
+                    assertTrue(request.history().getLast().result().successful());
+                    assertTrue(request.workingMemory().isEmpty());
                     return ModelResponse.finish("done");
             }
         }, List.of(new ReadFileTool(workspace), new RememberFactTool(session), new ApplyPatchTool(workspace, session)), 7).run(session);
         assertEquals(AgentSession.Status.COMPLETED, session.status());
-        assertTrue(Files.readString(root.resolve("Main.java")).contains("n = 2"));
+        assertTrue(Files.readString(root.resolve("Main.java")).contains("n = 3"));
     }
 
     private ModelResponse read(String id) {

@@ -103,7 +103,9 @@ class DockerWorkspaceTest {
         assertEquals(fingerprint, workspace.fileFingerprint("./Main.java"));
         assertEquals("Main.java", fingerprint.getPath());
         assertTrue(workspace.searchCode(".", "class Main").content().contains("Main.java:1"));
-        assertTrue(workspace.applyPatch("Main.java", "class Main {}", "class Main { int n; }").successful());
+        var patched=workspace.applyPatch("Main.java", "class Main {}", "class Main { int n; }");
+        assertTrue(patched.successful());
+        assertEquals(workspace.fileFingerprint("Main.java"),patched.fileFingerprint());
         assertNotEquals(fingerprint, workspace.fileFingerprint("Main.java"));
         assertTrue(workspace.createFile("New.java", "class New {}\n").successful());
         assertTrue(workspace.diff("Main.java").content().contains("-class Main {}"));

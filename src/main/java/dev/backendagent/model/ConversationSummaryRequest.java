@@ -19,12 +19,16 @@ public record ConversationSummaryRequest(String objective, ConversationSummary p
         var evidence=ConversationEvidenceCatalog.build(request);
         input.set("evidence",json.valueToTree(evidence));
         var metadata=input.putArray("messages");
-        for(var message:request.messages()) metadata.addObject().put("id",message.id()).put("role",message.role());
+        for(var message:request.messages()) metadata.addObject().put("id",message.id())
+                .put("turnId",message.turnId()).put("role",message.role());
         var previous=input.putArray("previousSummary");
         if(request.previousSummary()!=null) for(var note:request.previousSummary().getNotes())
             evidence.stream().filter(e->e.getSourceCallId().equals(note.getSourceCallId())&&e.getEvidenceQuote().equals(note.getEvidenceQuote()))
-                .findFirst().ifPresent(e->previous.addObject().put("statement",note.getStatement()).put("evidenceId",e.getEvidenceId())
-                    .put("section",note.getSection()==null?"FINDINGS":note.getSection().name()));
+                .findFirst().ifPresent(e->{
+                    var item=previous.addObject().put("statement",note.getStatement()).put("evidenceId",e.getEvidenceId())
+                            .put("section",note.getSection()==null?"FINDINGS":note.getSection().name());
+                    ConversationMessage.annotateSource(item,note.getSourceCallId());
+                });
         input.put("recommendedMaximumItems",Math.max(1,Math.min(32,request.maxOutputCharacters()/240)));
         return input;
     }

@@ -292,10 +292,15 @@ public final class AgentRuntime {
     }
 
     private PreparedContext prepareContext(AgentSession session, ContextSummary summary, boolean install) {
+        return prepareContext(session, summary, session.conversationSummary(), install);
+    }
+
+    private PreparedContext prepareContext(AgentSession session, ContextSummary summary,
+                                           ConversationSummary dialogueSummary, boolean install) {
         session.refreshVerificationBasis();
         var definitions = tools.values().stream().map(Tool::definition).toList();
         int remaining = maxModelCalls - session.modelCalls();
-        var initial = contextAssembler.preview(session, definitions, remaining, summary);
+        var initial = contextAssembler.preview(session, definitions, remaining, summary, dialogueSummary);
         var report = model.inspectRequest(initial);
         if (report == null || report.isWithinBudget()) {
             if (install) { session.installProjection(initial.contextProjection()); }
@@ -316,7 +321,7 @@ public final class AgentRuntime {
         for (int i = latestStart; i < raw.size(); i++) { minimumCharacters += configuredHistoryBudget.measure(filtered.get(i)); }
         int minimumLimit = (int) Math.max(1, minimumCharacters);
         var minimumBudget = new ContextBudget(minimumLimit);
-        var minimum = new ContextAssembler(minimumBudget).preview(session, definitions, remaining, summary);
+        var minimum = new ContextAssembler(minimumBudget).preview(session, definitions, remaining, summary, dialogueSummary);
         var minimumReport = model.inspectRequest(minimum);
         if (minimumReport.isWithinBudget()) { best = new PreparedContext(minimum, minimumBudget, minimumReport); }
         int low = minimumLimit;
@@ -325,7 +330,7 @@ public final class AgentRuntime {
             int mid = low + (high - low) / 2;
             var candidateBudget = new ContextBudget(mid);
             dev.backendagent.model.ModelRequest candidate;
-            try { candidate = new ContextAssembler(candidateBudget).preview(session, definitions, remaining, summary); }
+            try { candidate = new ContextAssembler(candidateBudget).preview(session, definitions, remaining, summary, dialogueSummary); }
             catch (IllegalStateException protectedContentTooLarge) { low = mid + 1; continue; }
             var candidateReport = model.inspectRequest(candidate);
             if (candidateReport.isWithinBudget()) {
@@ -354,10 +359,8 @@ public final class AgentRuntime {
         try {
             var notes=model.summarizeConversation(request);stage=SummaryRejection.Stage.SUMMARY_VALIDATION;
             candidate=compactor.validate(request,notes,session);stage=SummaryRejection.Stage.REQUEST_BUDGET;
-            var preview=new ContextAssembler(configuredHistoryBudget).preview(session,tools.values().stream().map(Tool::definition).toList(),
-                    maxModelCalls-session.modelCalls(),session.contextSummary(),candidate);
-            var report=model.inspectRequest(preview);
-            if(report!=null && !report.isWithinBudget()) throw new IllegalStateException("Conversation summary request budget failed");
+            // Use the same adaptive history allowance as the outgoing request before committing.
+            prepareContext(session, session.contextSummary(), candidate, false);
         } catch(PersistenceException failure){throw failure;}
         catch(RuntimeException failure){
             session.transitionTo(RUNNING);

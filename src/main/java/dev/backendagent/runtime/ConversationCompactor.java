@@ -7,7 +7,6 @@ import java.util.*;
 public final class ConversationCompactor {
     public static final int RECENT_TURNS=2, MIDDLE_TURNS=8, INTERVAL=4;
     public static final int MAX_INPUT_CHARACTERS=24000;
-    public static final int MAX_NEW_CONTENT_CHARACTERS=4000;
     private final int minimumInputCharacters;
     public ConversationCompactor(int minimumInputCharacters) { this.minimumInputCharacters=minimumInputCharacters; }
     public static List<ConversationMessage> messages(ConversationTurn turn) {
@@ -51,10 +50,8 @@ public final class ConversationCompactor {
             }
             var proposed=new ArrayList<>(input);proposed.addAll(batch);
             var candidate=new ConversationSummaryRequest(session.currentTask(),visibleSummary(session.conversationSummary(),turns),from,to+1,4000,proposed);
-            // Bound new dialogue separately from the carried checkpoint; do not charge audit storage twice.
-            long newCharacters=proposed.stream().mapToLong(m->m.content().length()).sum();
-            if (!input.isEmpty() && newCharacters>MAX_NEW_CONTENT_CHARACTERS) break;
-            // Always preserve a whole user/answer pair; unselected turns remain raw.
+            // Pack whole user/answer pairs up to the encoded input cap, including the carried
+            // checkpoint and evidence. The output limit is not an input batch-size limit.
             try { if (new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(candidate.referenceData()).length()>MAX_INPUT_CHARACTERS) break; }
             catch (java.io.IOException failure) { throw new IllegalStateException("Cannot encode conversation input",failure); }
             input=proposed;

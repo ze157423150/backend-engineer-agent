@@ -139,7 +139,8 @@ public final class DockerWorkspace implements WorkspaceAccess {
             }
             var result = json.treeToValue(response.path("result"), ToolResult.class);
             boolean needsFingerprint = result.successful()
-                    && (operation.equals("read_file") || operation.equals("file_fingerprint") || operation.equals("create_file"));
+                    && (operation.equals("read_file") || operation.equals("file_fingerprint") || operation.equals("create_file")
+                        || operation.equals("apply_patch") || operation.equals("apply_patch_batch"));
             if (needsFingerprint && (result.fileFingerprint() == null
                     || !Path.of(arguments.get("path")).normalize().toString().equals(result.fileFingerprint().getPath()))) {
                 throw new IOException("Missing or mismatched worker file fingerprint; rebuild sandbox image");

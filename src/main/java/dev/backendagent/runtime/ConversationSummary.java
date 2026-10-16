@@ -40,7 +40,14 @@ public final class ConversationSummary {
         catch (java.io.IOException failure) { throw new IllegalStateException("Cannot encode conversation summary", failure); }
     }
     public com.fasterxml.jackson.databind.node.ObjectNode contextData() {
-        return SummaryContextView.data(revision, "coveredTurns", coveredTurns, notes);
+        var view = SummaryContextView.data(revision, "coveredTurns", coveredTurns, notes);
+        for (var section : view.path("sections")) {
+            for (var item : section) {
+                ConversationMessage.annotateSource((com.fasterxml.jackson.databind.node.ObjectNode) item,
+                        item.path("sourceCallId").asText());
+            }
+        }
+        return view;
     }
     public int characterCount() { return contextData().toString().length(); }
     public int getRevision(){ return revision; }

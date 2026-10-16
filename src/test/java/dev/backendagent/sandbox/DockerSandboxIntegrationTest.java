@@ -12,6 +12,23 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Opt-in real container verification after building the local image. Never invokes a model API. */
 @EnabledIfSystemProperty(named = "docker.integration", matches = "true")
 class DockerSandboxIntegrationTest {
+    @Test void successfulPatchFragmentsCanBeReusedInContainerWithoutRereading() throws Exception {
+        var source=Files.createDirectory(root.resolve("source"));Files.writeString(source.resolve("Main.java"),"class Main { int n=1; }\n");
+        var workspace=DockerWorkspace.create(new Workspace(source,source.resolve("private.properties")),
+                Files.createDirectory(root.resolve("session")),new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);
+        var session=new dev.backendagent.runtime.AgentSession("edit twice");var step=new java.util.concurrent.atomic.AtomicInteger();
+        new dev.backendagent.runtime.AgentRuntime(q->switch(step.getAndIncrement()){
+            case 0->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("r","read_file",java.util.Map.of("path","Main.java","start_line","1","end_line","10","format","raw")));
+            case 1->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("p","apply_patch",java.util.Map.of("path","Main.java","old_text","n=1","new_text","n=2")));
+            case 2->{assertNotNull(q.history().getLast().result().fileFingerprint());yield dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("p2","apply_patch",java.util.Map.of("path","Main.java","old_text","n=2","new_text","n=3")));}
+            default->dev.backendagent.model.ModelResponse.finish("done");
+        },java.util.List.of(new dev.backendagent.tools.ReadFileTool(workspace),new dev.backendagent.tools.ApplyPatchTool(workspace,session)),4).run(session);
+        assertEquals(dev.backendagent.runtime.AgentSession.Status.COMPLETED,session.status());
+        assertTrue(session.history().getLast().result().successful());
+        assertEquals(workspace.fileFingerprint("Main.java"),session.history().getLast().result().fileFingerprint());
+        assertEquals(1,session.history().stream().filter(e->e.call().name().equals("read_file")).count());
+        assertEquals("class Main { int n=1; }\n",Files.readString(source.resolve("Main.java")));
+    }
     @Test void contractBasisAndCompletionGateWorkWithRealMaven() throws Exception {
         Path source=Files.createDirectory(root.resolve("source"));
         Files.copy(Path.of("examples/test-repair/pom.xml"),source.resolve("pom.xml"));

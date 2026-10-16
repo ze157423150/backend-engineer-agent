@@ -475,6 +475,13 @@ public final class AgentSession {
                 if(!entry.result().successful()||saved==null||!Path.of(saved.getPath()).equals(requested))continue;
                 String source=null;
                 if(entry.call().name().equals("create_file"))source=entry.call().arguments().get("content");
+                else if(entry.call().name().equals("apply_patch"))source=entry.call().arguments().get("new_text");
+                else if(entry.call().name().equals("apply_patch_batch")) {
+                    // Each replacement is a known fragment, not an invitation to join disjoint ranges.
+                    var edits=dev.backendagent.tools.ApplyPatchBatchTool.decode(entry.call().arguments().get("patches"));
+                    source=edits.stream().map(dev.backendagent.tools.PatchEdit::getNewText)
+                            .filter(text->text.contains(oldText)).findFirst().orElse(null);
+                }
                 else if(entry.call().name().equals("read_file")&&!staleEvidenceIds.contains(entry.call().id())) {
                     source=entry.result().content();
                     if(!"raw".equals(entry.call().arguments().get("format"))) {
