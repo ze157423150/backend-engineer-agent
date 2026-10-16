@@ -32,6 +32,19 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DeepSeekModelClientTest {
+    @Test void refinementSendsOnlyCandidateFactsAndRestoresTheSelectedSource() throws Exception {
+        var note=new dev.backendagent.runtime.SummaryNote(dev.backendagent.runtime.SummaryNote.Kind.PROGRESS,
+                "保留公共接口", "turn-1-user", "不修改公共接口",dev.backendagent.runtime.SummarySection.CONSTRAINTS);
+        var input=new SummaryRefinementRequest(List.of(note),List.of(new SummaryEvidence("old-id","turn-1-user","不修改公共接口")),4288,4000);
+        responses.add(finalResponse("{\"sections\":{\"CONSTRAINTS\":[{\"statement\":\"保留接口\",\"evidenceId\":\"E1\"}],\"FINDINGS\":[],\"CHANGES_AND_TESTS\":[],\"OPEN_ISSUES\":[]}}"));
+        var notes=client(Duration.ofSeconds(5)).refineSummary(input);
+        assertEquals("turn-1-user",notes.getFirst().getSourceCallId());
+        assertEquals("不修改公共接口",notes.getFirst().getEvidenceQuote());
+        var body=requests.getLast();assertFalse(body.has("tools"));
+        var data=json.readTree(body.path("messages").get(1).path("content").asText());
+        assertEquals(288,data.path("excessCharacters").asInt());
+        assertEquals(3600,data.path("targetCharacters").asInt());assertFalse(data.has("objective"));
+    }
     @Test void verificationEvidenceExpectationsAndRejectionReachTheRequest() throws Exception {
         var state=new dev.backendagent.verification.VerificationState();
         var basis=new dev.backendagent.verification.VerificationBasis("TAX",1,"read",new FileFingerprint("tax.md","1".repeat(64)),1,1,"tax=(base*rate+5000)/10000\n");
@@ -626,8 +639,16 @@ class DeepSeekModelClientTest {
         var body=requests.getLast();
         assertFalse(body.has("tools"));
         var reference=json.readTree(body.path("messages").get(1).path("content").asText());
-        assertEquals("turn-1-user",reference.path("messages").get(0).path("id").asText());
+        assertEquals("第1轮用户（turn-1-user）",reference.path("messages").get(0).path("source").asText());
         assertFalse(reference.has("observations"));
+        assertEquals("current",reference.path("objective").asText());
+        for (var evidence : reference.path("evidence")) {
+            assertEquals("turn-1-user",evidence.path("sourceCallId").asText());
+            assertFalse(evidence.path("evidenceQuote").asText().contains("current"));
+        }
+        var instruction=body.path("messages").get(0).path("content").asText();
+        assertTrue(instruction.contains("objective仅用于筛选历史相关性，不是摘要事实来源"));
+        assertTrue(instruction.contains("不得借用历史evidenceId为其标注来源"));
     }
 
     private SummaryRequest summaryRequest() {

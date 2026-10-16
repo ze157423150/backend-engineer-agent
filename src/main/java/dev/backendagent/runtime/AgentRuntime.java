@@ -358,7 +358,9 @@ public final class AgentRuntime {
         ConversationSummary candidate;
         try {
             var notes=model.summarizeConversation(request);stage=SummaryRejection.Stage.SUMMARY_VALIDATION;
-            candidate=compactor.validate(request,notes,session);stage=SummaryRejection.Stage.REQUEST_BUDGET;
+            candidate=validateWithRefinement(session, notes, request.evidence(), request.maxOutputCharacters(),
+                    true, request.toIndex(), values -> compactor.validate(request,values,session)).candidate();
+            stage=SummaryRejection.Stage.REQUEST_BUDGET;
             // Use the same adaptive history allowance as the outgoing request before committing.
             prepareContext(session, session.contextSummary(), candidate, false);
         } catch(PersistenceException failure){throw failure;}
@@ -398,9 +400,11 @@ public final class AgentRuntime {
         try {
             var notes = model.summarize(request);
             failureStage = SummaryRejection.Stage.SUMMARY_VALIDATION;
-            candidate = contextCompactor.validate(request, notes, session);
+            var validated = validateWithRefinement(session, notes, request.getEvidence(), request.getMaxOutputCharacters(),
+                    false, request.getToIndex(), values -> contextCompactor.validate(request,values,session));
+            candidate = validated.candidate();
             failureStage = SummaryRejection.Stage.DEDUPLICATION;
-            deduplication = new SummaryDeduplicator().analyze(notes, session::originalObservation);
+            deduplication = new SummaryDeduplicator().analyze(validated.notes(), session::originalObservation);
             // Source-valid summaries must also leave room for the next complete outgoing request.
             failureStage = SummaryRejection.Stage.REQUEST_BUDGET;
             prepareContext(session, candidate, false);
@@ -424,6 +428,45 @@ public final class AgentRuntime {
                 + ", suspectedDuplicatePairs=" + deduplication.getSuspectedPairs(), candidate);
         session.checkpoint();
         progress.accept("上下文摘要完成，继续处理任务。");
+    }
+
+    private record ValidatedSummary<T>(T candidate, List<SummaryNote> notes) { }
+
+    private <T> ValidatedSummary<T> validateWithRefinement(AgentSession session, List<SummaryNote> notes,
+            List<dev.backendagent.model.SummaryEvidence> evidence, int maxCharacters, boolean conversation,
+            int coverage, java.util.function.Function<List<SummaryNote>, T> validate) {
+        try { return new ValidatedSummary<>(validate.apply(notes), notes); }
+        catch (IllegalArgumentException failure) {
+            // Only length failures get one extra call; never retry source errors, JSON errors or full-request failures.
+            if (!("Summary exceeds character limit".equals(failure.getMessage())
+                    || "Summary exceeds reserved budget".equals(failure.getMessage()))
+                    || !model.supportsSummaryRefinement() || maxModelCalls-session.modelCalls()<2) throw failure;
+            int current = summaryDisplayCharacters(session, notes, conversation, coverage);
+            if (current <= maxCharacters) throw failure;
+            var request = new dev.backendagent.model.SummaryRefinementRequest(notes,evidence,current,maxCharacters);
+            session.countModelCall();
+            session.append(SUMMARY_REFINEMENT_STARTED, "kind="+(conversation?"conversation":"tools")
+                    +", call="+session.modelCalls()+", currentCharacters="+current+", maxCharacters="+maxCharacters
+                    +", targetCharacters="+request.getTargetCharacters());
+            progress.accept("摘要超长，进行一次精简重试……");
+            var refined = model.refineSummary(request);
+            request.validateSources(refined);
+            // Outside the first validation try: another length failure cannot recursively retry.
+            T candidate = validate.apply(refined);
+            session.append(SUMMARY_REFINEMENT_COMPLETED, "call="+session.modelCalls()+", beforeCharacters="+current
+                    +", afterCharacters="+summaryDisplayCharacters(session,refined,conversation,coverage));
+            return new ValidatedSummary<>(candidate, refined);
+        }
+    }
+
+    private int summaryDisplayCharacters(AgentSession session, List<SummaryNote> notes, boolean conversation, int coverage) {
+        int revision = conversation ? session.conversationSummary()==null?1:session.conversationSummary().getRevision()+1
+                : session.contextSummary()==null?1:session.contextSummary().getRevision()+1;
+        var view=SummaryContextView.data(revision,conversation?"coveredTurns":"coveredExchanges",coverage,notes);
+        if(conversation) for(var section:view.path("sections")) for(var item:section)
+            dev.backendagent.model.ConversationMessage.annotateSource(
+                    (com.fasterxml.jackson.databind.node.ObjectNode)item,item.path("sourceCallId").asText());
+        return view.toString().length();
     }
 
     private ToolResult executeTool(ToolCall call) {

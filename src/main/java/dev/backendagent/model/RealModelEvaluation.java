@@ -240,6 +240,10 @@ public final class RealModelEvaluation {
                 return client.execute(actual(request));
             }
             public boolean supportsSummarization() { return !full; }
+            public boolean supportsSummaryRefinement() { return !full && client.supportsSummaryRefinement(); }
+            public List<SummaryNote> refineSummary(SummaryRefinementRequest request) {
+                return client.refineSummary(request);
+            }
             public List<SummaryNote> summarize(SummaryRequest request) {
                 if (summaries != null) summaries.add(JSON.valueToTree(request));
                 return client.summarize(request);

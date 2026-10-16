@@ -105,6 +105,8 @@ public final class HistoryFreshnessEvaluation {
                     ModelClient measured = new ModelClient() {
                         public RequestBudgetReport inspectRequest(ModelRequest request) { return client.inspectRequest(request); }
                         public boolean supportsSummarization() { return client.supportsSummarization(); }
+                        public boolean supportsSummaryRefinement() { return client.supportsSummaryRefinement(); }
+                        public List<SummaryNote> refineSummary(SummaryRefinementRequest request) { return client.refineSummary(request); }
                         public List<SummaryNote> summarize(SummaryRequest request) { return client.summarize(request); }
                         public ModelResponse execute(ModelRequest request) {
                             try {

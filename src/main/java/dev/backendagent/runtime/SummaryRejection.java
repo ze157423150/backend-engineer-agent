@@ -55,6 +55,8 @@ public final class SummaryRejection {
             case "Summary source is outside the middle window" -> "SOURCE_OUTSIDE_WINDOW";
             case "Summary cannot promote stale evidence" -> "STALE_EVIDENCE";
             case "Summary quote was not in summary input" -> "QUOTE_NOT_IN_INPUT";
+            case "Summary refinement source is not in original input" -> "REFINEMENT_INVALID_SOURCE";
+            case "Summary refinement changed source" -> "REFINEMENT_CHANGED_SOURCE";
             case "Summary exceeds reserved budget" -> "SUMMARY_BUDGET_EXCEEDED";
             case "Summary does not reduce replaced context" -> "NO_COMPRESSION_GAIN";
             case "DeepSeek request timed out" -> "MODEL_TIMEOUT";
@@ -80,6 +82,8 @@ public final class SummaryRejection {
         return new SummaryRejection(stage, code, switch (code) {
             case "QUOTE_NOT_IN_MESSAGE" -> "引用不是对应用户消息或回答中的连续原文";
             case "QUOTE_NOT_IN_ORIGINAL" -> "引用不是对应工具结果中的连续原文";
+            case "REFINEMENT_INVALID_SOURCE" -> "超长候选的来源未通过原输入核验，不进行精简";
+            case "REFINEMENT_CHANGED_SOURCE" -> "精简摘要使用了候选之外的来源或改变了原始引句";
             case "QUOTE_NOT_IN_INPUT" -> "引用未出现在本次摘要输入或可沿用的旧摘要中";
             case "STALE_EVIDENCE" -> "摘要引用了已过期的证据";
             case "NO_COMPRESSION_GAIN" -> "摘要长度没有小于被替换的上下文";

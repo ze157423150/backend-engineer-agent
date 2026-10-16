@@ -12,6 +12,8 @@ public record ConversationSummaryRequest(String objective, ConversationSummary p
             throw new IllegalArgumentException("Invalid conversation summary request");
     }
     /** Shared encoding for planning and transport; audit quotes are offered once as evidence. */
+    public List<SummaryEvidence> evidence() { return ConversationEvidenceCatalog.build(this); }
+
     public com.fasterxml.jackson.databind.node.ObjectNode referenceData() {
         var json = new com.fasterxml.jackson.databind.ObjectMapper();
         var request = this;
@@ -19,8 +21,7 @@ public record ConversationSummaryRequest(String objective, ConversationSummary p
         var evidence=ConversationEvidenceCatalog.build(request);
         input.set("evidence",json.valueToTree(evidence));
         var metadata=input.putArray("messages");
-        for(var message:request.messages()) metadata.addObject().put("id",message.id())
-                .put("turnId",message.turnId()).put("role",message.role());
+        for(var message:request.messages()) ConversationMessage.annotateSource(metadata.addObject(),message.id());
         var previous=input.putArray("previousSummary");
         if(request.previousSummary()!=null) for(var note:request.previousSummary().getNotes())
             evidence.stream().filter(e->e.getSourceCallId().equals(note.getSourceCallId())&&e.getEvidenceQuote().equals(note.getEvidenceQuote()))

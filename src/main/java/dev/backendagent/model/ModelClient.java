@@ -9,6 +9,10 @@ public interface ModelClient {
         throw new UnsupportedOperationException("Conversation summaries are not supported");
     }
     default boolean supportsSummarization() { return false; }
+    default boolean supportsSummaryRefinement() { return false; }
+    default java.util.List<dev.backendagent.runtime.SummaryNote> refineSummary(SummaryRefinementRequest request) {
+        throw new UnsupportedOperationException("Summary refinement is not supported");
+    }
     default java.util.List<dev.backendagent.runtime.SummaryNote> summarize(SummaryRequest request) {
         throw new UnsupportedOperationException("Summary calls are not supported by this model client");
     }

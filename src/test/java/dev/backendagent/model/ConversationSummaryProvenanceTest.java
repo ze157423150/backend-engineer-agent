@@ -16,12 +16,13 @@ class ConversationSummaryProvenanceTest {
         var original = new ConversationSummary(1, 4, notes);
         var restored = json.readValue(original.referenceJson(), ConversationSummary.class);
         var entries = restored.contextData().path("sections").path("CONSTRAINTS");
-        assertEquals(1, entries.get(0).path("sourceTurnId").asInt());
-        assertEquals("user", entries.get(0).path("sourceRole").asText());
-        assertEquals(4, entries.get(1).path("sourceTurnId").asInt());
-        assertEquals("assistant", entries.get(1).path("sourceRole").asText());
+        assertEquals("第1轮用户（turn-1-user）", entries.get(0).path("source").asText());
+        assertEquals("第4轮助手（turn-4-answer）", entries.get(1).path("source").asText());
         assertEquals("错误分子仅5xx", entries.get(1).path("statement").asText());
-        assertEquals("turn-4-answer", entries.get(1).path("sourceCallId").asText());
+        assertEquals(2,entries.get(1).size());
+        assertFalse(entries.get(1).has("sourceCallId"));
+        assertFalse(entries.get(1).has("sourceTurnId"));
+        assertFalse(entries.get(1).has("sourceRole"));
         assertFalse(restored.referenceJson().contains("sourceRole"));
         assertFalse(restored.contextData().toString().contains("evidenceQuote"));
         assertEquals(restored.contextData().toString().length(), restored.characterCount());
@@ -36,10 +37,10 @@ class ConversationSummaryProvenanceTest {
                 List.of(new ConversationMessage("turn-5-user",5,"user","改为4xx与5xx但排除429")));
         var reference = request.referenceData();
         var carried = reference.path("previousSummary").get(0);
-        assertEquals(4,carried.path("sourceTurnId").asInt());
-        assertEquals("assistant",carried.path("sourceRole").asText());
+        assertEquals("第4轮助手（turn-4-answer）",carried.path("source").asText());
+        assertTrue(carried.has("evidenceId"));
         var message = reference.path("messages").get(0);
-        assertEquals(5,message.path("turnId").asInt());
-        assertEquals("user",message.path("role").asText());
+        assertEquals("第5轮用户（turn-5-user）",message.path("source").asText());
+        assertEquals(1,message.size());
     }
 }
