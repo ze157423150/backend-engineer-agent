@@ -19,6 +19,8 @@
 | 会话管理 | 列表、切换、新建与确认删除；历史、副本、摘要、调用额度及同步基准按 UUID 隔离 |
 | 模型失败处理 | 保存安全诊断，任务请求最多两次额外重试，计入累计调用预算 |
 
+最新版本：[v2.0.0](https://github.com/ze157423150/backend-engineer-agent/releases/tag/v2.0.0) · [更新记录](CHANGELOG.md)
+
 ## 快速开始
 
 前置条件：JDK 21、Maven 3.8.7 或以上、本机 Linux Docker。最近验证使用 Maven 3.9.9。构建和镜像准备需要下载依赖；运行测试工具使用镜像内预装依赖，离线执行。
@@ -32,8 +34,8 @@ cp agent-local.properties.example agent-local.properties
 配置文件已存在时跳过最后一步。在编辑器中填写 `agent-local.properties` 的 `model.api-key`，不要加引号。本地配置已被 Git 忽略；没有密钥时可以先查看帮助或运行普通回归测试。
 
 ```bash
-java -jar target/backend-engineer-agent-1.0.0.jar --help
-java -jar target/backend-engineer-agent-1.0.0.jar \
+java -jar target/backend-engineer-agent-2.0.0.jar --help
+java -jar target/backend-engineer-agent-2.0.0.jar \
   --interactive --workspace examples/test-repair \
   --config agent-local.properties --max-model-calls 60
 ```
@@ -43,7 +45,7 @@ java -jar target/backend-engineer-agent-1.0.0.jar \
 也保留单次任务入口：
 
 ```bash
-java -jar target/backend-engineer-agent-1.0.0.jar \
+java -jar target/backend-engineer-agent-2.0.0.jar \
   --workspace examples/test-repair \
   --task "先运行测试定位失败，修复Calculator.add实现，不修改现有测试预期，再运行测试并解释结果" \
   --config agent-local.properties \
@@ -97,7 +99,7 @@ flowchart TD
 
 ```bash
 SESSION_ID='替换为会话UUID'
-java -jar target/backend-engineer-agent-1.0.0.jar \
+java -jar target/backend-engineer-agent-2.0.0.jar \
   --workspace examples/test-repair --continue-session "$SESSION_ID" \
   --message "补充负数和零值测试，保留已有测试，然后运行测试" \
   --config agent-local.properties --max-model-calls 30
@@ -113,7 +115,7 @@ java -jar target/backend-engineer-agent-1.0.0.jar \
 
 ## 测试结果
 
-最近一次回归共 364 项：361 项通过、3 项 Docker 集成测试默认跳过，失败与错误均为 0。此前单独运行的 3 项 Docker 集成测试全部通过。
+最近一次常规回归：552 项通过，9 项 Docker 集成测试默认跳过，随后单独执行全部通过，失败与错误均为 0。真实模型长会话从第 44 轮保存状态恢复，追加第 45—64 轮均完成并通过独立验收；该结果针对固定任务轨迹，不代表通用任务成功率或会话轮数上限。
 
 已验证代码读写、测试反馈、上下文压缩、历史检索、会话恢复、会话切换、写回冲突检查和删除保护。详见 [测试结果](docs/VALIDATION.md)。
 
