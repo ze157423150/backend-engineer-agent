@@ -551,7 +551,12 @@ public final class AgentSession {
 
     /** Patch authorization uses only source fragments visible in the last model request/current batch. */
     public boolean hasCurrentPatchSource(String relativePath,String oldText,dev.backendagent.tools.WorkspaceAccess workspace) {
-        if(relativePath==null||relativePath.isBlank()||oldText==null||oldText.isEmpty())return false;
+        return assessCurrentPatchSource(relativePath, oldText, workspace) == PatchSourceStatus.CURRENT;
+    }
+
+    /** Classify only visible sources; diagnostics never authorize hidden or obsolete text. */
+    public PatchSourceStatus assessCurrentPatchSource(String relativePath,String oldText,dev.backendagent.tools.WorkspaceAccess workspace) {
+        if(relativePath==null||relativePath.isBlank()||oldText==null||oldText.isEmpty())return PatchSourceStatus.INVALID_ARGUMENTS;
         try {
             Path requested=Path.of(relativePath).normalize();
             var visible=new java.util.ArrayList<ToolExchange>(contextProjection==null?history:contextProjection.getHistory());
@@ -562,19 +567,26 @@ public final class AgentSession {
                 }
             }
             dev.backendagent.model.FileFingerprint current=null;
+            boolean currentFragment=false, changedSource=false, previouslyReplaced=false;
             for(int i=visible.size()-1;i>=0;i--) {
                 var entry=visible.get(i);var saved=entry.result().fileFingerprint();
                 if(!entry.result().successful()||saved==null||!Path.of(saved.getPath()).equals(requested))continue;
                 String source=null;
+                boolean replaced=false;
                 if(entry.call().name().equals("create_file"))source=entry.call().arguments().get("content");
-                else if(entry.call().name().equals("apply_patch"))source=entry.call().arguments().get("new_text");
-                else if(entry.call().name().equals("apply_patch_batch")) {
-                    // Each replacement is a known fragment, not an invitation to join disjoint ranges.
-                    var edits=dev.backendagent.tools.ApplyPatchBatchTool.decode(entry.call().arguments().get("patches"));
-                    source=edits.stream().map(dev.backendagent.tools.PatchEdit::getNewText)
-                            .filter(text->text.contains(oldText)).findFirst().orElse(null);
+                else if(entry.call().name().equals("apply_patch")) {
+                    source=entry.call().arguments().get("new_text");
+                    String prior=entry.call().arguments().get("old_text");
+                    replaced=prior!=null&&prior.contains(oldText)&&source!=null&&!source.contains(oldText);
                 }
-                else if(entry.call().name().equals("read_file")&&!staleEvidenceIds.contains(entry.call().id())) {
+                else if(entry.call().name().equals("apply_patch_batch")) {
+                    var edits=dev.backendagent.tools.ApplyPatchBatchTool.decode(entry.call().arguments().get("patches"));
+                    // Do not concatenate independent replacements into an invented source fragment.
+                    source=edits.stream().map(dev.backendagent.tools.PatchEdit::getNewText)
+                            .filter(text->text.contains(oldText)).findFirst().orElse("");
+                    replaced=edits.stream().anyMatch(edit->edit.getOldText().contains(oldText)&&!edit.getNewText().contains(oldText));
+                }
+                else if(entry.call().name().equals("read_file")) {
                     source=entry.result().content();
                     if(!(entry.result().readMetadata()==null ? "raw".equals(entry.call().arguments().get("format"))
                             : entry.result().readMetadata().usesRawText(entry.call().arguments().get("format")))) {
@@ -585,23 +597,33 @@ public final class AgentSession {
                         source=text.toString();
                     }
                 }
-                if(source==null||!source.contains(oldText))continue;
+                if(source==null&&!replaced)continue;
                 if(current==null)current=workspace.fileFingerprint(relativePath);
-                if(saved.equals(current))return true;
+                boolean fresh=saved.equals(current)
+                        && !(entry.call().name().equals("read_file")&&staleEvidenceIds.contains(entry.call().id()));
+                boolean matches=source!=null&&source.contains(oldText);
+                if(fresh&&matches)return PatchSourceStatus.CURRENT;
+                currentFragment|=fresh;
+                changedSource|=matches&&!fresh;
+                previouslyReplaced|=fresh&&replaced;
             }
-            // Only an actually retrieved file range with a live matching fingerprint authorizes a patch.
             for(var evidence:historicalEvidence.snapshot()) {
                 if(evidence.getSourceFile()==null || !Path.of(evidence.getSourceFile().getPath()).equals(requested)
                         || staleEvidenceIds.contains(evidence.getSourceCallId()))continue;
                 var source=originalObservation(evidence.getSourceCallId());
                 String text=evidence.rawSourceExcerpt(source);
-                if(text==null || !text.contains(oldText))continue;
+                if(text==null)continue;
                 if(current==null)current=workspace.fileFingerprint(relativePath);
-                if(current.equals(evidence.getSourceFile()))return true;
+                boolean fresh=current.equals(evidence.getSourceFile());
+                if(fresh&&text.contains(oldText))return PatchSourceStatus.CURRENT;
+                currentFragment|=fresh;
+                changedSource|=!fresh&&text.contains(oldText);
             }
-            return false;
+            if(previouslyReplaced)return PatchSourceStatus.PREVIOUSLY_REPLACED;
+            if(changedSource)return PatchSourceStatus.SOURCE_VERSION_CHANGED;
+            return currentFragment?PatchSourceStatus.CURRENT_TEXT_MISMATCH:PatchSourceStatus.SOURCE_NOT_VISIBLE;
         } catch(dev.backendagent.persistence.PersistenceException fatal){throw fatal;}
-        catch(java.io.IOException|IllegalArgumentException unavailable){return false;}
+        catch(java.io.IOException|IllegalArgumentException unavailable){return PatchSourceStatus.SOURCE_UNAVAILABLE;}
     }
 
     void transitionTo(Status next) {

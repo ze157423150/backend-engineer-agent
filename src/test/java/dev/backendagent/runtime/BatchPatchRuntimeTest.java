@@ -6,6 +6,15 @@ class BatchPatchRuntimeTest {
  @TempDir Path root;
  private ToolCall read(){return new ToolCall("read","read_file",Map.of("path","Main.java","format","raw","start_line","1","end_line","20"));}
  private ToolCall patch(String id,String old,String text){return new ToolCall(id,"apply_patch",Map.of("path","Main.java","old_text",old,"new_text",text));}
+ @Test void noChangePatchReportsItsActualCauseWithoutAuthorizingAnyWrite()throws Exception{
+  Files.writeString(root.resolve("Main.java"),"first last");var w=new Workspace(root,root.resolve("agent-local.properties"));var s=new AgentSession("edit");var count=new AtomicInteger();
+  new AgentRuntime(r->switch(count.getAndIncrement()){
+   case 0->ModelResponse.callTool(patch("noop","unobserved","unobserved"));
+   case 1->ModelResponse.callTool(new ToolCall("batch","apply_patch_batch",Map.of("path","Main.java","patches","[{\"id\":\"noop\",\"old_text\":\"first\",\"new_text\":\"first\"},{\"id\":\"real\",\"old_text\":\"last\",\"new_text\":\"changed\"}]")));
+   default->{assertTrue(r.history().stream().allMatch(e->!e.result().successful()&&e.result().content().contains("PATCH_NO_CHANGE")));yield ModelResponse.finish("no write");}
+  },List.of(new ApplyPatchTool(w,s)),3).run(s);
+  assertEquals("first last",Files.readString(root.resolve("Main.java")));assertEquals(0,s.workspaceState().getRevision());
+ }
  @Test void ordinaryMultipleCallsBecomeOneDurableWriteWithoutReread()throws Exception{
   Files.writeString(root.resolve("Main.java"),"class Main { int a=1; int b=2; }\n");var w=new Workspace(root,root.resolve("agent-local.properties"));var s=new AgentSession("edit");var count=new AtomicInteger();
   new AgentRuntime(r->switch(count.getAndIncrement()){

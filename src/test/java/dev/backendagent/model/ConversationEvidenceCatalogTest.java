@@ -6,6 +6,24 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ConversationEvidenceCatalogTest {
+    @Test void excerptBoundaryDoesNotIntroduceNewlinesIntoOriginalQuotes() {
+        String original = java.util.stream.IntStream.range(0,3100)
+                .mapToObj(i -> String.valueOf((char)(0x4e00+i))).collect(java.util.stream.Collectors.joining());
+        String excerpt = original.substring(0,1600)
+                + "\n[消息节选；完整原文可用read_turn提取]\n" + original.substring(original.length()-700);
+        var request = new ConversationSummaryRequest("audit", null, 0, 1, 4000,
+                List.of(new ConversationMessage("turn-1-answer",1,"assistant",excerpt)));
+        var notes = new java.util.ArrayList<SummaryNote>();
+        for (var item : request.evidence()) {
+            assertTrue(original.contains(item.getEvidenceQuote()), item.getEvidenceId());
+            assertTrue(excerpt.contains(item.getEvidenceQuote()));
+            notes.add(new SummaryNote(SummaryNote.Kind.PROGRESS,"历史记录",item.getSourceCallId(),item.getEvidenceQuote()));
+        }
+        new ConversationSummary(1,1,notes).validateAgainst(List.of(
+                new ConversationTurn(1,"audit",AgentSession.Status.COMPLETED,original,0,0)));
+        assertEquals(2300, request.evidence().stream().mapToInt(e -> e.getEvidenceQuote().length()).sum());
+    }
+
     @Test void quotesAreContinuousOriginalTextAndNeverContainExcerptMarkers() {
         String text="user rule\n"+"x".repeat(500)+"\n[消息节选；完整原文可用read_turn提取]\nnew rule\n";
         var request=new ConversationSummaryRequest("audit",null,0,1,4000,

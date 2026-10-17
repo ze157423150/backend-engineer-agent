@@ -10,8 +10,11 @@ final class ConversationEvidenceCatalog {
     static List<SummaryEvidence> build(ConversationSummaryRequest request) {
         var originals = request.messages().stream().map(m -> new ToolExchange(
                 new ToolCall(m.id(), "read_turn", Map.of()), new ToolResult(true, m.content()), null, 0)).toList();
-        var visible = originals.stream().map(e -> new ToolExchange(e.call(), new ToolResult(true,
-                e.result().content().replace("[消息节选；完整原文可用read_turn提取]", "[OMITTED]")), null, 0)).toList();
+        // The newlines around the excerpt marker were inserted by the compactor. They
+        // must not become part of an audit quote, or join the two nonadjacent fragments.
+        var visible = originals.stream().flatMap(e -> java.util.Arrays.stream(e.result().content().split(
+                java.util.regex.Pattern.quote("\n[消息节选；完整原文可用read_turn提取]\n"), -1))
+                .map(fragment -> new ToolExchange(e.call(), new ToolResult(true, fragment), null, 0))).toList();
         var prior = request.previousSummary() == null ? null : new ContextSummary(request.previousSummary().getRevision(),
                 request.previousSummary().getCoveredTurns(), request.previousSummary().getNotes());
         return SummaryEvidenceCatalog.build(visible, prior,

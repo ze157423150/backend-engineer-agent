@@ -36,7 +36,13 @@ public final class ContextWindowPolicy {
         for (int index = oldest; index < recent; index++) { allowed.add(history.get(index).call().id()); }
         // A checkpoint may carry still-valid older facts; only raw candidates use the middle window.
         var sources = history.stream().collect(java.util.stream.Collectors.toMap(e -> e.call().id(), e -> e));
+        int pending=SummarySourcePolicy.pendingTestFailure(history,stale);
+        String pendingId=pending<0?null:history.get(pending).call().id();
         var notes = summary.getNotes().stream().filter(note -> !stale.contains(note.getSourceCallId())
+                && !(sources.containsKey(note.getSourceCallId())
+                    && sources.get(note.getSourceCallId()).call().name().equals("run_tests")
+                    && !sources.get(note.getSourceCallId()).result().successful()
+                    && !note.getSourceCallId().equals(pendingId))
                 && sources.containsKey(note.getSourceCallId()) && SummarySourcePolicy.substantive(sources.get(note.getSourceCallId()))
                 && !SummarySourcePolicy.resolvedExecutionIssue(note,history)).toList();
         return notes.isEmpty() ? null : new ContextSummary(summary.getRevision(), summary.getCoveredExchanges(), notes);

@@ -30,28 +30,41 @@ public final class ContextCompactor {
         int oldest = ContextWindowPolicy.suffixStart(raw, ContextWindowPolicy.RECENT_BATCHES + ContextWindowPolicy.SUMMARY_BATCHES);
         int covered = session.contextSummary() == null ? 0 : session.contextSummary().getCoveredExchanges();
         int attempt = Math.max(covered, session.lastWindowSummaryAttemptEnd());
-        if (attempt >= recent || ContextWindowPolicy.countBatches(raw, Math.max(oldest, attempt), recent)
-                < (pressure?1:ContextWindowPolicy.SUMMARY_INTERVAL_BATCHES)) { return waiting(); }
-        int outputLimit = Math.min(4000, budget.getMaxHistoryCharacters() / 4);
-        if (outputLimit < 512) { return waiting(); }
         var stale = StaleObservationFilter.staleIds(raw);
         var previous = ContextWindowPolicy.visibleSummary(session.contextSummary(), raw, stale);
+        int pending=SummarySourcePolicy.pendingTestFailure(raw,stale);
+        String pendingId=pending<0?null:raw.get(pending).call().id();
+        boolean carried=previous!=null&&previous.getNotes().stream()
+                .anyMatch(note->SummarySourcePolicy.isFailureNote(note,pendingId));
+        boolean deferred=pending>=0&&pending<recent&&!carried;
+        if (attempt >= recent || (!deferred&&ContextWindowPolicy.countBatches(raw, Math.max(oldest, attempt), recent)
+                < (pressure?1:ContextWindowPolicy.SUMMARY_INTERVAL_BATCHES))) { return waiting(); }
+        int outputLimit = Math.min(4000, budget.getMaxHistoryCharacters() / 4);
+        if (outputLimit < 512) { return waiting(); }
         int from = Math.max(Math.max(covered, oldest), session.lastWindowSummarySkippedEnd());
         var input = new ArrayList<ToolExchange>();
+        // A skipped/failed summary boundary is not evidence that the unresolved test was summarized.
+        int requestFrom=deferred?Math.min(from,pending):from;
+        if(deferred&&pending<from)input.add(excerpt(session.originalObservation(pendingId)));
         SummaryRequest best = null;
+        if(!input.isEmpty()) {
+            var catchUp=new SummaryRequest(session.currentTask(),previous,requestFrom,Math.max(from,pending+1),outputLimit,input,
+                    session::originalObservation);
+            if(encodedLength(catchUp)<=MAX_INPUT_CHARACTERS)best=catchUp;
+        }
         for (int start = from; start < recent;) {
             int end = start + 1;
             int turn = raw.get(start).modelCallNumber();
             while (turn > 0 && end < recent && raw.get(end).modelCallNumber() == turn) { end++; }
             for (int index = start; index < end; index++) {
                 var saved = raw.get(index);
-                // Only reload eligible middle-window evidence, never the distant archive or stale bodies.
+                // Ordinary records use the middle window; only the unresolved test may be retrieved from earlier history.
                 if (!stale.contains(saved.call().id()) && SummarySourcePolicy.substantive(saved)) {
                     input.add(excerpt(session.originalObservation(saved.call().id())));
                 }
             }
             if (input.isEmpty()) { start = end; continue; }
-            var candidate = new SummaryRequest(session.currentTask(), previous, from, end, outputLimit, input,
+            var candidate = new SummaryRequest(session.currentTask(), previous, requestFrom, end, outputLimit, input,
                     session::originalObservation);
             if (encodedLength(candidate) > MAX_INPUT_CHARACTERS) { break; }
             best = candidate;
@@ -107,6 +120,14 @@ public final class ContextCompactor {
         var stale = StaleObservationFilter.staleIds(session.history());
         int oldest = ContextWindowPolicy.suffixStart(session.history(), ContextWindowPolicy.RECENT_BATCHES + ContextWindowPolicy.SUMMARY_BATCHES);
         int recent = ContextWindowPolicy.suffixStart(session.history(), ContextWindowPolicy.RECENT_BATCHES);
+        int pending=SummarySourcePolicy.pendingTestFailure(session.history(),stale);
+        String pendingId=pending<0?null:session.history().get(pending).call().id();
+        boolean pendingOffered=pendingId!=null&&(request.getObservations().stream()
+                .anyMatch(e->e.call().id().equals(pendingId))
+                ||request.getPreviousSummary()!=null&&request.getPreviousSummary().getNotes().stream()
+                    .anyMatch(note->SummarySourcePolicy.isFailureNote(note,pendingId)));
+        if(pendingOffered&&notes.stream().noneMatch(note->SummarySourcePolicy.isFailureNote(note,pendingId)))
+            throw new IllegalArgumentException("Summary must retain the unresolved test failure in OPEN_ISSUES");
         for (var note : candidate.getNotes()) {
             if (note.getKind() == SummaryNote.Kind.NEXT_STEP) {
                 throw new IllegalArgumentException("New summaries cannot contain NEXT_STEP");
@@ -114,7 +135,9 @@ public final class ContextCompactor {
             boolean carried = request.getPreviousSummary() != null && request.getPreviousSummary().getNotes().stream()
                     .anyMatch(old -> old.getSourceCallId().equals(note.getSourceCallId())
                             && old.getEvidenceQuote().equals(note.getEvidenceQuote()));
-            if (!carried && session.history().subList(oldest, recent).stream().noneMatch(exchange -> exchange.call().id().equals(note.getSourceCallId()))) {
+            boolean pendingCatchUp=pendingOffered&&note.getSourceCallId().equals(pendingId)
+                    &&request.getObservations().stream().anyMatch(e->e.call().id().equals(pendingId));
+            if (!carried && !pendingCatchUp && session.history().subList(oldest, recent).stream().noneMatch(exchange -> exchange.call().id().equals(note.getSourceCallId()))) {
                 throw new IllegalArgumentException("Summary source is outside the middle window");
             }
             if (stale.contains(note.getSourceCallId())) {
@@ -136,8 +159,9 @@ public final class ContextCompactor {
         if (candidate.characterCount() > request.getMaxOutputCharacters()) {
             throw new IllegalArgumentException("Summary exceeds reserved budget");
         }
-        long replacedCharacters = session.history().subList(request.getFromIndex(), request.getToIndex())
-                .stream().mapToLong(budget::measure).sum();
+        // A catch-up source must not inflate savings by counting all intervening, unoffered history.
+        long replacedCharacters = request.getObservations().stream()
+                .map(exchange->session.originalObservation(exchange.call().id())).mapToLong(budget::measure).sum();
         if (request.getPreviousSummary() != null) { replacedCharacters += request.getPreviousSummary().characterCount(); }
         if (candidate.characterCount() >= replacedCharacters) {
             throw new IllegalArgumentException("Summary does not reduce replaced context");

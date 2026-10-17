@@ -11,6 +11,19 @@ public final class SummarySourcePolicy {
             default -> true;
         };
     }
+    /** Only the latest test result can describe an unresolved failure of this snapshot. */
+    public static int pendingTestFailure(java.util.List<ToolExchange> history, java.util.Set<String> stale) {
+        for (int i=history.size()-1;i>=0;i--) {
+            var entry=history.get(i);
+            if (entry.call().name().equals("run_tests"))
+                return !entry.result().successful()&&!stale.contains(entry.call().id()) ? i : -1;
+        }
+        return -1;
+    }
+    public static boolean isFailureNote(SummaryNote note,String callId) {
+        return callId!=null&&callId.equals(note.getSourceCallId())
+                &&(note.getSection()==SummarySection.OPEN_ISSUES||note.getKind()==SummaryNote.Kind.OPEN_ISSUE);
+    }
     /** Retire only the literal not-yet-tested issue when a later executed test exists. */
     public static boolean resolvedExecutionIssue(SummaryNote note,java.util.List<ToolExchange> history) {
         if(note.getSection()!=SummarySection.OPEN_ISSUES&&note.getKind()!=SummaryNote.Kind.OPEN_ISSUE)return false;

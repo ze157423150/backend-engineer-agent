@@ -17,16 +17,24 @@ public final class ApplyPatchTool implements Tool {
 
     public String name() { return "apply_patch"; }
     public ToolDefinition definition() {
-        return new ToolDefinition(name(), "精确替换已有文本文件中的一处内容。可复用带当前文件指纹的读取、成功创建或成功补丁片段，无需重复读取；旧文本只允许匹配一次。"
+        return new ToolDefinition(name(), "精确替换已有文本文件中的一处内容。可复用带当前文件指纹的读取、成功创建或成功补丁片段，无需重复读取；旧文本只允许匹配一次；只替换匹配片段，其余内容保留。整文件更新须匹配完整旧文件，不能用第一行替换为整份内容。"
                 + "同文件多处修改优先apply_patch_batch；同一响应中连续同文件补丁会整组校验，重叠整组拒绝。支持片段删除，不创建或删除文件，不执行命令。", Map.of(
                 "path", "工作区相对文件路径", "old_text", "从可见且指纹有效的读取、创建content或成功补丁new_text复制，保留缩进换行；缺少片段时read_file",
                 "new_text", "替换后的文本，可为空；新旧文本各最多 24000 字符"));
     }
 
     public ToolResult execute(Map<String, String> arguments) {
-        if (session.status() != AgentSession.Status.WAITING_FOR_TOOL
-                || !session.hasCurrentPatchSource(arguments.get("path"), arguments.get("old_text"), workspace)) {
-            return new ToolResult(false, "补丁未应用：缺少带当前指纹的可见旧文本；可复用有效读取、创建content或成功补丁new_text。旧补丁没有指纹、文件已变化或缺少片段时，先read_file。");
+        if (session.status() == AgentSession.Status.WAITING_FOR_TOOL
+                && arguments.get("old_text") != null
+                && arguments.get("old_text").equals(arguments.get("new_text"))) {
+            return new ToolResult(false, "PATCH_NO_CHANGE: 新旧文本完全相同，未写入；无需为此补读文件，请仅提交实际修改。");
+        }
+        if (session.status() != AgentSession.Status.WAITING_FOR_TOOL) {
+            return new ToolResult(false, "PATCH_STATE: 只能在工具阶段修改；未写入。");
+        }
+        var source = session.assessCurrentPatchSource(arguments.get("path"), arguments.get("old_text"), workspace);
+        if (source != dev.backendagent.runtime.PatchSourceStatus.CURRENT) {
+            return new ToolResult(false, source.feedback() + "；未写入。");
         }
         ToolResult result = workspace.applyPatch(arguments.get("path"), arguments.get("old_text"), arguments.get("new_text"));
         if (result.successful()) {
