@@ -174,7 +174,7 @@ class ContextComparisonTest {
                 current.set(session);
                 store.create(session);
                 new AgentRuntime(measured, tools(session, workspace, store), 12).run(session);
-                assertEquals(AgentSession.Status.BUDGET_EXHAUSTED, session.status());
+                assertEquals(AgentSession.Status.BUDGET_EXHAUSTED, session.status(),session.events().getLast().detail());
                 store.saveSnapshot(session);
                 id = session.id();
             }
@@ -190,10 +190,17 @@ class ContextComparisonTest {
                 assertTrue(Files.readString(root.resolve("Main.java")).contains("return 2;"));
                 assertEquals(1, restored.workspaceState().getRevision());
                 assertEquals(WorkspaceState.TestStatus.CURRENT_PASSED, restored.workspaceState().testStatus());
-                // Short input is skipped; only the deliberate invalid response is rejected.
-                assertEquals(1, restored.events().stream().filter(event -> event.type() == AgentSession.EventType.COMPACTION_FAILED).count());
-                assertEquals(3, summaries.get());
-                assertEquals(2, restored.events().stream().filter(event -> event.type() == AgentSession.EventType.COMPACTION_COMPLETED).count());
+                // Pressure can reject a source-valid summary with no outgoing-request gain;
+                // the deliberate malformed response must still be rejected independently.
+                var rejected=restored.events().stream().filter(event->event.type()==AgentSession.EventType.COMPACTION_FAILED).toList();
+                assertEquals(2,rejected.size());
+                assertEquals(1,rejected.stream().filter(e->e.detail().contains("NO_COMPRESSION_GAIN")).count());
+                assertEquals(1,rejected.stream().filter(e->e.detail().contains("INVALID_JSON_STRUCTURE")).count());
+                long installed=restored.events().stream().filter(event->event.type()==AgentSession.EventType.COMPACTION_COMPLETED).count();
+                // Read display and prompt size affect when this fixed trace needs compression.
+                assertTrue(installed>=1,"Fixed trace must still exercise successful summary installation");
+                assertEquals(installed+rejected.size(),summaries.get());
+                assertTrue(summaries.get()<=8,"Pressure must not summarize after every new tool batch");
                 assertTrue(restored.events().stream().anyMatch(event -> event.type() == AgentSession.EventType.WINDOW_SUMMARY_SKIPPED));
                 assertTrue(restored.events().stream().anyMatch(event -> event.type() == AgentSession.EventType.SESSION_RESUMED));
             }

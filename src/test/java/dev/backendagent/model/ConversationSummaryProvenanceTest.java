@@ -26,7 +26,7 @@ class ConversationSummaryProvenanceTest {
         assertFalse(restored.referenceJson().contains("sourceRole"));
         assertFalse(restored.contextData().toString().contains("evidenceQuote"));
         assertEquals(restored.contextData().toString().length(), restored.characterCount());
-        assertTrue(restored.characterCount() > SummaryContextView.data(1,"coveredTurns",4,notes).toString().length());
+        assertTrue(restored.characterCount() > SummaryContextView.data(notes).toString().length());
         assertFalse(new ContextSummary(1,4,notes).contextData().toString().contains("sourceRole"));
     }
 

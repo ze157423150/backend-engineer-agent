@@ -15,7 +15,7 @@ public final class CreateFileTool implements Tool {
     public String name() { return "create_file"; }
     public ToolDefinition definition() {
         return new ToolDefinition(name(), "创建一个不存在的文本文件，绝不覆盖已有文件。安全创建工作区内缺失的父目录；"
-                + "先探索目录和项目约定；成功返回创建指纹，完整创建参数仍可见且指纹有效时可直接apply_patch，不必再读取。", Map.of(
+                + "仅在目标目录或约定未知时探索；成功返回创建指纹，完整创建参数仍可见且指纹有效时可直接apply_patch，不必再读取。", Map.of(
                 "path", "工作区相对新文件路径，使用允许的文本扩展名，例如 java、xml、md",
                 "content", "完整文件文本，最多 24000 字符，可为空"));
     }

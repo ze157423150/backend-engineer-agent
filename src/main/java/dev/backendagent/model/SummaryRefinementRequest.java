@@ -55,7 +55,17 @@ public final class SummaryRefinementRequest {
         var data = json.createObjectNode().put("currentCharacters", currentCharacters)
                 .put("maxCharacters", maxCharacters).put("excessCharacters", currentCharacters - maxCharacters)
                 .put("targetCharacters", targetCharacters);
-        data.set("evidence", json.valueToTree(evidence));
+        // Quotes stay local: refinement may only rewrite facts already in candidate.
+        data.put("fixedMetadataReserve", 160);
+        data.put("recommendedStatementCharacters", targetCharacters * 45 / 100);
+        var costs = data.putArray("sourceCosts");
+        for (var source : evidence) {
+            var item = json.createObjectNode().put("statement", "").put("sourceCallId", source.getSourceCallId());
+            if (source.getSourceCallId().matches("turn-[1-9][0-9]*-(user|answer)"))
+                ConversationMessage.annotateSource(item, source.getSourceCallId());
+            int itemCost = item.toString().length() + 1;
+            costs.addObject().put("evidenceId", source.getEvidenceId()).put("itemMetadataCharacters", itemCost);
+        }
         var candidate = data.putObject("candidate");
         for (var section : SummarySection.values()) {
             var items = candidate.putArray(section.name());

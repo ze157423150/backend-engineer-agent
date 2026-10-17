@@ -22,6 +22,60 @@ class AutomaticVerificationTest {
             return List.of(available(r.sources().stream().filter(s->s.userRequirement()&&s.turnId()==r.turnId()).findFirst().orElseThrow()));
         }
     }
+    @Test void oversizedBasisCompactsOnceAndReservesTaskCall() throws Exception {
+        var w=workspace();var session=new AgentSession("规则".repeat(300));var compactCalls=new AtomicInteger();
+        var runtime=new AgentRuntime(new UpdatingModel(){
+            public List<ActiveVerificationBasis> updateVerificationBasis(VerificationUpdateRequest r){return Collections.nCopies(12,super.updateVerificationBasis(r).getFirst());}
+            public boolean supportsVerificationCompaction(){return true;}
+            public List<ActiveVerificationBasis> compactVerificationBasis(VerificationCompactionRequest r){compactCalls.incrementAndGet();return List.of(r.candidate().getFirst());}
+            public ModelResponse execute(ModelRequest r){assertEquals(1,r.verificationContext().activeBases().size());return ModelResponse.finish("done");}
+        },List.of(new PinVerificationBasisTool(session,w)),3);
+        runtime.run(session);
+        assertEquals(AgentSession.Status.COMPLETED,session.status());assertEquals(3,session.modelCalls());assertEquals(1,compactCalls.get());
+        assertTrue(session.events().stream().anyMatch(e->e.type()==AgentSession.EventType.VERIFICATION_COMPACTION_COMPLETED));
+    }
+    @Test void compactionFailureOrInsufficientBudgetNeverLoopsOrPersistsOversizedCandidate() throws Exception {
+        for(int budget:List.of(2,5)) {
+            var w=workspace();var session=new AgentSession("规则".repeat(300));var compactCalls=new AtomicInteger();
+            new AgentRuntime(new UpdatingModel(){
+                public List<ActiveVerificationBasis> updateVerificationBasis(VerificationUpdateRequest r){return Collections.nCopies(12,super.updateVerificationBasis(r).getFirst());}
+                public boolean supportsVerificationCompaction(){return true;}
+                public List<ActiveVerificationBasis> compactVerificationBasis(VerificationCompactionRequest r){compactCalls.incrementAndGet();return r.candidate();}
+                public ModelResponse execute(ModelRequest r){assertTrue(r.verificationContext()==null||r.verificationContext().activeBases().isEmpty());return ModelResponse.finish("done");}
+            },List.of(new PinVerificationBasisTool(session,w)),budget).run(session);
+            assertEquals(AgentSession.Status.COMPLETED,session.status(),session.events().toString());assertEquals(budget==2?0:1,compactCalls.get());
+            assertTrue(session.verificationLedger().bases().isEmpty());assertEquals(budget==2?2:3,session.modelCalls());
+        }
+    }
+    @Test void sameFileHashDoesNotRefreshOnNewCallIdsFormatsOrPartialReadsButChangedHashDoes() throws Exception {
+        var w=workspace();Files.writeString(root.resolve("contract.md"),"原规则A\n原规则B\n");
+        var session=new AgentSession("按contract.md核验");var updates=new AtomicInteger();var step=new AtomicInteger();
+        var model=new UpdatingModel(){
+            public List<ActiveVerificationBasis> updateVerificationBasis(VerificationUpdateRequest r){updates.incrementAndGet();return super.updateVerificationBasis(r);}
+            public ModelResponse execute(ModelRequest r){return switch(step.getAndIncrement()){
+                case 0 -> ModelResponse.callTool(new ToolCall("first","read_file",Map.of("path","contract.md","start_line","1","end_line","1")));
+                case 1 -> ModelResponse.callTool(new ToolCall("raw","read_file",Map.of("path","contract.md","start_line","1","end_line","2","format","raw")));
+                case 2 -> ModelResponse.callTool(new ToolCall("again","read_file",Map.of("path","contract.md","start_line","2","end_line","2")));
+                case 3 -> ModelResponse.callTool(new ToolCall("edit","apply_patch",Map.of("path","contract.md","old_text","原规则A","new_text","新规则A")));
+                case 4 -> ModelResponse.callTool(new ToolCall("changed","read_file",Map.of("path","contract.md","start_line","1","end_line","2","format","raw")));
+                default -> ModelResponse.finish("done");};}
+        };
+        new AgentRuntime(model,List.of(new PinVerificationBasisTool(session,w),new ReadFileTool(w),new ApplyPatchTool(w,session)),15).run(session);
+        assertEquals(AgentSession.Status.COMPLETED,session.status(),session.events().toString());
+        assertEquals(3,updates.get()); // turn start, first version, changed version
+        assertEquals(w.fileFingerprint("contract.md").getSha256(),session.verificationLedger().attemptedFileVersions().get("contract.md"));
+    }
+    @Test void failedFileRefreshDoesNotRetryWhenUnchangedFileIsReadAgain() throws Exception {
+        var w=workspace();Files.writeString(root.resolve("contract.md"),"规则\n");var session=new AgentSession("核验contract.md");
+        var updates=new AtomicInteger();var step=new AtomicInteger();
+        new AgentRuntime(new UpdatingModel(){
+            public List<ActiveVerificationBasis> updateVerificationBasis(VerificationUpdateRequest r){updates.incrementAndGet();throw new IllegalArgumentException("invalid output");}
+            public ModelResponse execute(ModelRequest r){int n=step.getAndIncrement();return n<3?
+                    ModelResponse.callTool(new ToolCall("read"+n,"read_file",Map.of("path","contract.md","start_line","1","end_line","1","format",n==1?"raw":"numbered"))):ModelResponse.finish("done");}
+        },List.of(new PinVerificationBasisTool(session,w),new ReadFileTool(w)),10).run(session);
+        assertEquals(AgentSession.Status.COMPLETED,session.status());assertEquals(2,updates.get());
+        assertEquals(1,session.verificationLedger().attemptedFileVersions().size());
+    }
     @Test void automaticallyRefreshesAtTurnStartAndCarriesSupersessionWithLaterUserSource() throws Exception {
         var w=workspace();var session=new AgentSession("仅统计5xx");var updates=new AtomicInteger();
         ModelClient model=new UpdatingModel(){
@@ -74,6 +128,36 @@ class AutomaticVerificationTest {
         new AgentRuntime(new UpdatingModel(){public ModelResponse execute(ModelRequest r){return ModelResponse.finish("done");}},
                 List.of(new PinVerificationBasisTool(s,w)),1).run(s);
         assertEquals(AgentSession.Status.COMPLETED,s.status());assertEquals(1,s.modelCalls());assertNull(s.verificationLedger());
+    }
+    @Test void rejectedInstallBudgetPreservesPreviouslyAvailableContractAndDoesNotRetryUnchangedInput() throws Exception {
+        var w=workspace();Files.writeString(root.resolve("contract.md"),"所有状态均参与百分位\n");
+        var s=new AgentSession("按contract.md检查百分位");var updates=new AtomicInteger();
+        ModelClient model=new UpdatingModel(){
+            public RequestBudgetReport inspectRequest(ModelRequest r){
+                boolean candidate=r.verificationContext()!=null&&r.verificationContext().activeBases().stream()
+                        .anyMatch(b->b.source().id().equals("turn-2-user"));
+                return new RequestBudgetReport(candidate?65000:1000,4096,1024,65536);
+            }
+            public List<ActiveVerificationBasis> updateVerificationBasis(VerificationUpdateRequest r){
+                updates.incrementAndGet();
+                var result=new ArrayList<ActiveVerificationBasis>(super.updateVerificationBasis(r));
+                r.sources().stream().filter(x->x.kind().equals("FILE")).findFirst().ifPresent(x->result.add(available(x)));
+                return result;
+            }
+            public ModelResponse execute(ModelRequest r){
+                if(r.history().isEmpty())return ModelResponse.callTool(new ToolCall("doc","read_file",
+                        Map.of("path","contract.md","start_line","1","end_line","1","format","raw")));
+                if(r.latestTurnId()==2)assertTrue(r.verificationContext().activeBases().stream()
+                        .anyMatch(b->b.source().id().equals("doc")&&b.status().equals("AVAILABLE")));
+                return ModelResponse.finish("done");
+            }
+        };
+        var runtime=new AgentRuntime(model,List.of(new PinVerificationBasisTool(s,w),new ReadFileTool(w)),10);
+        runtime.run(s);runtime.continueConversation(s,"保持规则，复核同一契约");
+        assertEquals(AgentSession.Status.COMPLETED,s.status());assertEquals(3,updates.get());
+        assertTrue(s.events().stream().anyMatch(e->e.type()==AgentSession.EventType.VERIFICATION_UPDATE_FAILED
+                &&e.detail().contains("reasonCode=INSTALL_BUDGET")));
+        assertTrue(s.verificationLedger().bases().stream().anyMatch(b->b.source().id().equals("doc")&&b.status().equals("AVAILABLE")));
     }
     @Test void obsoleteBasisDoesNotKeepItselfVisibleButSummaryAndToolArgumentsCountAsTraces() {
         var old=new VerificationSource("turn-1-user","USER",1,"仅统计5xx",null,"CURRENT");
@@ -153,6 +237,23 @@ class AutomaticVerificationTest {
         assertEquals("docs/policy.md",view.path("contracts").get(0).path("path").asText());
         assertFalse(view.toString().contains("dddddddd"));assertFalse(view.toString().contains("currency"));
         assertFalse(view.toString().contains("reason"));assertEquals(List.of(previous),request.validate(List.of(previous)));
+    }
+    @Test void checkpointPersistsAttemptedFileVersionsAlongsideMatchingLedgerEvent() throws Exception {
+        var repo=Files.createDirectory(root.resolve("repo-hashes"));Files.writeString(repo.resolve("contract.md"),"429仍计入4xx桶\n");
+        var directory=root.resolve("hash-sessions");java.util.UUID id;
+        try(var store=new dev.backendagent.persistence.FileSessionStore(directory)) {
+            var w=new Workspace(repo,root.resolve("agent-local.properties"));store.bindWorkspace(w);
+            var session=new AgentSession("核验contract.md",store);store.create(session);id=session.id();
+            new AgentRuntime(new UpdatingModel(){
+                public ModelResponse execute(ModelRequest r){return r.history().isEmpty()?
+                        ModelResponse.callTool(new ToolCall("doc","read_file",Map.of("path","contract.md","start_line","1","end_line","1"))):ModelResponse.finish("done");}
+            },List.of(new PinVerificationBasisTool(session,w),new ReadFileTool(w)),8).run(session);
+            assertEquals(AgentSession.Status.COMPLETED,session.status());
+        }
+        try(var store=new dev.backendagent.persistence.FileSessionStore(directory)) {
+            var w=new Workspace(repo,root.resolve("agent-local.properties"));var restored=store.openCompleted(id,w,12);
+            assertEquals(Map.of("contract.md",w.fileFingerprint("contract.md").getSha256()),restored.verificationLedger().attemptedFileVersions());
+        }
     }
     @Test void checkpointRestoresLedgerAndRejectsEventDisagreementWithoutLeakingAcrossSessions() throws Exception {
         var directory=root.resolve("sessions");var repo=Files.createDirectory(root.resolve("repo"));java.util.UUID id;

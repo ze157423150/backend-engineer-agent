@@ -20,12 +20,12 @@ class ReadMetadataTest {
     }
     @Test void repeatHintsRetainSingleCopyOfSourceAndMetadataRoundTrips() throws Exception {
         Files.writeString(root.resolve("X.java"),"a\nb\nc\n");var tool=new ReadFileTool(new Workspace(root,root.resolve("agent-local.properties")));
-        tool.execute(Map.of("path","X.java","start_line","1","end_line","3","format","raw"));
-        var repeat=tool.execute(Map.of("path","X.java","start_line","2","end_line","3","format","raw"));
-        assertTrue(repeat.readMetadata().isPreviouslyRead());assertEquals("b\nc\n",repeat.content());
+        tool.execute(Map.of("path","X.java","start_line","1","end_line","3"));
+        var repeat=tool.execute(Map.of("path","X.java","start_line","2","end_line","3"));
+        assertTrue(repeat.readMetadata().isPreviouslyRead());assertEquals("file=X.java, totalLines=3\n2: b\n3: c\n",repeat.content());
         var json=new ObjectMapper();assertEquals(repeat,json.readValue(json.writeValueAsString(repeat),ToolResult.class));
         Files.writeString(root.resolve("X.java"),"changed\nb\nc\n");
-        assertFalse(tool.execute(Map.of("path","X.java","start_line","2","end_line","3","format","raw")).readMetadata().isPreviouslyRead());
+        assertFalse(tool.execute(Map.of("path","X.java","start_line","2","end_line","3")).readMetadata().isPreviouslyRead());
     }
     @Test void changingCoveredRangesDoesNotCountAsProgress(){
         var detector=new NoProgressDetector();var file=new FileFingerprint("X.java","a".repeat(64));

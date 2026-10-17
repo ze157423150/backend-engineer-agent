@@ -20,10 +20,11 @@ public final class AgentSession {
         CONVERSATION_COMPACTION_STARTED, CONVERSATION_COMPACTION_COMPLETED, CONVERSATION_COMPACTION_FAILED, CONVERSATION_SUMMARY_SKIPPED, CONVERSATION_SUMMARY_ATTEMPTED, SUMMARY_REFINEMENT_STARTED, SUMMARY_REFINEMENT_COMPLETED, USER_TURN_STARTED, SESSION_STARTED, REQUEST_BUDGET_CHECKED, COMPACTION_STARTED, COMPACTION_COMPLETED, COMPACTION_FAILED, CONTEXT_ASSEMBLED, MODEL_CALL_STARTED, MODEL_RESPONSE_RECEIVED, MODEL_CALL_FAILED, MODEL_RETRY_SCHEDULED,
         TOOL_CALL_REQUESTED, TOOL_EXECUTION_SUCCEEDED, TOOL_EXECUTION_FAILED, WORKING_MEMORY_UPDATED, FILE_EVIDENCE_INVALIDATED,
         WORKSPACE_REVISION_ADVANCED, TEST_RESULT_RECORDED,
-        WORKING_MEMORY_LOADED, HISTORY_BODIES_ARCHIVED, HISTORICAL_EVIDENCE_UPDATED, WINDOW_SUMMARY_ATTEMPTED, WINDOW_SUMMARY_SKIPPED, SESSION_RESUMED, SESSION_COMPLETED, SESSION_FAILED, BUDGET_EXHAUSTED,
+        WORKING_MEMORY_LOADED, HISTORY_BODIES_ARCHIVED, HISTORICAL_EVIDENCE_UPDATED, HISTORICAL_EVIDENCE_CLEARED, HISTORICAL_EVIDENCE_REMOVED, WINDOW_SUMMARY_ATTEMPTED, WINDOW_SUMMARY_SKIPPED, SESSION_RESUMED, SESSION_COMPLETED, SESSION_FAILED, BUDGET_EXHAUSTED,
         TOOL_BATCH_STARTED, TOOL_BATCH_PROGRESS, TOOL_BATCH_COMPLETED, TOOL_CALL_RETRY_AUTHORIZED, TOOL_EXECUTION_STARTED,
         NO_PROGRESS_WARNING, NO_PROGRESS_STOPPED, FINISH_REJECTED, MODEL_RESPONSE_NORMALIZED,
-        VERIFICATION_UPDATE_STARTED, VERIFICATION_BASES_UPDATED, VERIFICATION_UPDATE_FAILED, VERIFICATION_UPDATE_SKIPPED
+        CONTEXT_PRESSURE_STARTED, CONTEXT_PRESSURE_ACTION, CONTEXT_PRESSURE_FAILED,
+        VERIFICATION_COMPACTION_STARTED, VERIFICATION_COMPACTION_COMPLETED, VERIFICATION_UPDATE_STARTED, VERIFICATION_BASES_UPDATED, VERIFICATION_UPDATE_FAILED, VERIFICATION_UPDATE_SKIPPED
     }
 
     public record Event(long sequence, EventType type, String detail) {}
@@ -186,7 +187,24 @@ public final class AgentSession {
         if (checkpoint.getContextProjection() != null) {
             checkpoint.getContextProjection().validateAgainst(checkpoint.getHistory());
         }
-        var replayed = dev.backendagent.history.HistoricalEvidenceArea.replay(originals);
+        int evidenceStart=recordedEvents.stream().filter(e->e.type()==EventType.HISTORICAL_EVIDENCE_CLEARED)
+                .mapToInt(e->Integer.parseInt(e.detail())).max().orElse(0);
+        if(recordedEvents.stream().anyMatch(e->e.type()==EventType.HISTORICAL_EVIDENCE_CLEARED)
+                && (checkpoint.getTurns().isEmpty() || evidenceStart!=checkpoint.getTurns().getLast().getStartHistoryIndex()))
+            throw new IllegalArgumentException("Historical evidence clear boundary differs from current turn");
+        var removals=new java.util.TreeMap<Integer,java.util.Set<String>>();
+        for(var event:recordedEvents)if(event.type()==EventType.HISTORICAL_EVIDENCE_REMOVED) {
+            String[] parts=event.detail().split(":",-1);if(parts.length!=2)throw new IllegalArgumentException("Invalid evidence removal event");
+            int boundary=Integer.parseInt(parts[0]);
+            if(boundary<0||boundary>originals.size())throw new IllegalArgumentException("Invalid evidence removal boundary");
+            var removedSources=removals.computeIfAbsent(boundary,k->new java.util.HashSet<>());
+            for(String value:parts[1].split(",")) {
+                int sourceIndex=Integer.parseInt(value);
+                if(sourceIndex<0||sourceIndex>=boundary)throw new IllegalArgumentException("Invalid removed source");
+                removedSources.add(originals.get(sourceIndex).call().id());
+            }
+        }
+        var replayed = dev.backendagent.history.HistoricalEvidenceArea.replay(originals,evidenceStart,removals);
         if (!replayed.snapshot().equals(checkpoint.getHistoricalEvidence())) {
             throw new IllegalArgumentException("Checkpoint historical evidence differs from successful retrievals");
         }
@@ -260,6 +278,8 @@ public final class AgentSession {
         answer = null;
         status = Status.RUNNING;
         append(EventType.USER_TURN_STARTED, "turn=" + next.getTurnId(), next);
+        historicalEvidence.clear();
+        append(EventType.HISTORICAL_EVIDENCE_CLEARED,Integer.toString(history.size()));
         checkpoint();
     }
 
@@ -310,7 +330,10 @@ public final class AgentSession {
     public ContextSummary contextSummary() { return contextSummary; }
     void installSummary(ContextSummary summary) { this.contextSummary = summary; }
     public ContextProjection contextProjection() { return contextProjection; }
-    void installProjection(ContextProjection projection) { this.contextProjection = projection; }
+    void installProjection(ContextProjection projection) {
+        this.contextProjection = projection;
+        pruneHistoricalEvidence(e->dev.backendagent.history.HistoricalEvidenceArea.originalVisible(e,projection.getHistory()));
+    }
     public List<ToolExchange> history() { return List.copyOf(history); }
     public boolean hasDurableArchive() { return archive != null; }
     int lastWindowSummaryAttemptEnd() { return lastWindowSummaryEnd(false); }
@@ -329,6 +352,33 @@ public final class AgentSession {
     }
     public List<MemoryFact> memoryFacts() { return workingMemory.snapshot(); }
     public java.util.List<dev.backendagent.history.HistoricalEvidence> historicalEvidence() { return historicalEvidence.snapshot(); }
+    /** Revalidated outgoing view; never overwrite the durable retrieval-time provenance. */
+    public java.util.List<dev.backendagent.history.HistoricalEvidence> historicalEvidenceForContext() {
+        return historicalEvidence.snapshot().stream().map(e->{
+            var validity=ObservationEvidence.Validity.UNKNOWN;
+            if(staleEvidenceIds.contains(e.getSourceCallId()))validity=ObservationEvidence.Validity.STALE;
+            else if(e.getSourceFile()!=null && verificationHashes!=null) {
+                String hash=verificationHashes.get(e.getSourceFile().getPath());
+                validity=e.getSourceFile().getSha256().equals(hash)?ObservationEvidence.Validity.CURRENT:ObservationEvidence.Validity.STALE;
+            }
+            return e.withCurrentValidity(validity);
+        }).toList();
+    }
+    private void pruneHistoricalEvidence(java.util.function.Predicate<dev.backendagent.history.HistoricalEvidence> expired) {
+        var ids=historicalEvidence.snapshot().stream().filter(expired).map(e->e.getSourceCallId())
+                .collect(java.util.stream.Collectors.toSet());
+        if(ids.isEmpty())return;
+        var indexes=new java.util.ArrayList<String>();
+        for(int i=0;i<history.size();i++)if(ids.contains(history.get(i).call().id()))indexes.add(Integer.toString(i));
+        historicalEvidence.removeSources(ids);
+        append(EventType.HISTORICAL_EVIDENCE_REMOVED,history.size()+":"+String.join(",",indexes));
+    }
+    private void pruneExpiredHistoricalEvidence() {
+        pruneHistoricalEvidence(e->e.getValidityAtRetrieval()==ObservationEvidence.Validity.STALE
+                || staleEvidenceIds.contains(e.getSourceCallId())
+                || (e.getSourceFile()!=null&&verificationHashes!=null
+                    && !e.getSourceFile().getSha256().equals(verificationHashes.get(e.getSourceFile().getPath()))));
+    }
     public int historicalEvidenceCharacters() { return historicalEvidence.characterCount(); }
     void retainHistoricalEvidence(ToolExchange retrieval) {
         var evidence = retrieval.result().historicalEvidence();
@@ -337,6 +387,8 @@ public final class AgentSession {
         historicalEvidence.retain(evidence);
         append(EventType.HISTORICAL_EVIDENCE_UPDATED, "retained=" + historicalEvidence.snapshot().size()
                 + ", sourceCallId=" + evidence.getSourceCallId(), historicalEvidence.snapshot());
+        pruneHistoricalEvidence(e->e.getValidityAtRetrieval()==ObservationEvidence.Validity.STALE || staleEvidenceIds.contains(e.getSourceCallId())
+                || (contextProjection!=null && dev.backendagent.history.HistoricalEvidenceArea.originalVisible(e,contextProjection.getHistory())));
     }
     public int memoryCharacters() { return workingMemory.characterCount(); }
     public WorkspaceState workspaceState() { return workspaceState; }
@@ -366,12 +418,13 @@ public final class AgentSession {
         verificationWorkspace = java.util.Objects.requireNonNull(workspace);
     }
     public void refreshVerificationBasis() {
-        if (verificationState.bases().isEmpty() && verificationLedger == null) { return; }
+        if (verificationState.bases().isEmpty() && verificationLedger == null && historicalEvidence.snapshot().isEmpty()) { return; }
         java.util.Map<String,String> hashes = null;
         try { if (verificationWorkspace != null) hashes = verificationWorkspace.checkpointHashes(); }
         catch (java.io.IOException unavailable) { /* Unknown currency must not authorize registration. */ }
         verificationState.refresh(hashes, staleEvidenceIds);
         verificationHashes = hashes;
+        pruneExpiredHistoricalEvidence();
     }
     public int completionRejections() {
         String prefix = "turn=" + turns().size() + ";";
@@ -389,13 +442,17 @@ public final class AgentSession {
         return dev.backendagent.verification.TestFailureReport.from(latest.getCallId(), latest.getWorkspaceRevision(),
                 exchange.result().successful(), exchange.result().content());
     }
+    private boolean verificationBasisEnabled=true;
+    void setVerificationBasisEnabled(boolean enabled){verificationBasisEnabled=enabled;}
     public dev.backendagent.verification.VerificationContext verificationContext() {
+        if(!verificationBasisEnabled)return null;
         var view = new dev.backendagent.verification.VerificationContext(turns().size(), verificationState,
                 completionRejections(), new dev.backendagent.verification.CompletionVerifier().rejection(this), latestVerificationTest(),
                 verificationLedger == null ? List.of() : verificationLedger.bases());
         return view.isEmpty() ? null : view;
     }
     dev.backendagent.verification.VerificationContext verificationContext(dev.backendagent.model.ModelRequest request) {
+        if(!verificationBasisEnabled)return null;
         var visible=dev.backendagent.verification.VerificationSources.visible(request);
         var active = dev.backendagent.verification.VerificationSources.project(verificationLedger,
                 visible, verificationHashes, staleEvidenceIds).stream().filter(this::isAutomaticVerificationBasis).toList();
@@ -461,6 +518,7 @@ public final class AgentSession {
             }
         }
         workingMemory.removeSources(staleEvidenceIds);
+        pruneHistoricalEvidence(e->e.getSourceFile()!=null && Path.of(e.getSourceFile().getPath()).normalize().equals(changed));
         append(EventType.FILE_EVIDENCE_INVALIDATED, "file=" + changed
                 + ", remainingMemoryFacts=" + memoryFacts().size()
                 + "; earlier file reads and searches are historical data; read again before citing current code",
@@ -518,7 +576,8 @@ public final class AgentSession {
                 }
                 else if(entry.call().name().equals("read_file")&&!staleEvidenceIds.contains(entry.call().id())) {
                     source=entry.result().content();
-                    if(!"raw".equals(entry.call().arguments().get("format"))) {
+                    if(!(entry.result().readMetadata()==null ? "raw".equals(entry.call().arguments().get("format"))
+                            : entry.result().readMetadata().usesRawText(entry.call().arguments().get("format")))) {
                         var text=new StringBuilder();
                         for(String line:source.split("\\n",-1)) {
                             if(line.matches("\\d+: .*"))text.append(line.substring(line.indexOf(": ")+2)).append('\n');
@@ -529,6 +588,16 @@ public final class AgentSession {
                 if(source==null||!source.contains(oldText))continue;
                 if(current==null)current=workspace.fileFingerprint(relativePath);
                 if(saved.equals(current))return true;
+            }
+            // Only an actually retrieved file range with a live matching fingerprint authorizes a patch.
+            for(var evidence:historicalEvidence.snapshot()) {
+                if(evidence.getSourceFile()==null || !Path.of(evidence.getSourceFile().getPath()).equals(requested)
+                        || staleEvidenceIds.contains(evidence.getSourceCallId()))continue;
+                var source=originalObservation(evidence.getSourceCallId());
+                String text=evidence.rawSourceExcerpt(source);
+                if(text==null || !text.contains(oldText))continue;
+                if(current==null)current=workspace.fileFingerprint(relativePath);
+                if(current.equals(evidence.getSourceFile()))return true;
             }
             return false;
         } catch(dev.backendagent.persistence.PersistenceException fatal){throw fatal;}

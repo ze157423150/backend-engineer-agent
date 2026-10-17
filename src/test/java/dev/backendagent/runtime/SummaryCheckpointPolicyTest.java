@@ -29,7 +29,7 @@ class SummaryCheckpointPolicyTest {
         assertTrue(summary.referenceJson().length() > 4000);
         assertTrue(summary.characterCount() < 1500);
         assertFalse(summary.contextData().toString().contains("evidenceQuote"));
-        assertEquals(4, summary.contextData().path("sections").size());
+        assertEquals(1, summary.contextData().path("sections").size());
         var restored = new ObjectMapper().readValue(summary.referenceJson(), ContextSummary.class);
         assertEquals(12, restored.getNotes().size());
         assertEquals(notes.getFirst().getEvidenceQuote(), restored.getNotes().getFirst().getEvidenceQuote());

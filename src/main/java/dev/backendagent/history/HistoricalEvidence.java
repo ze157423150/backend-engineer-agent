@@ -7,7 +7,7 @@ import dev.backendagent.model.ToolExchange;
 import dev.backendagent.runtime.ObservationEvidence.Validity;
 import java.util.Objects;
 
-/** A bounded original excerpt for historical questions; never authorizes current-state claims. */
+/** Durable retrieval provenance; current validity is rechecked only in outgoing views. */
 public final class HistoricalEvidence {
     public enum UsageScope { HISTORICAL_ONLY }
     public static final int MAX_CONTENT_CHARACTERS = 1600;
@@ -19,6 +19,32 @@ public final class HistoricalEvidence {
     private final Long observedRevision;
     private final int startLine, endLine;
     private final boolean truncated;
+    private dev.backendagent.runtime.ObservationEvidence.Validity currentValidity;
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public Validity getCurrentValidity(){return currentValidity==null?Validity.UNKNOWN:currentValidity;}
+    public HistoricalEvidence withCurrentValidity(Validity validity) {
+        var view=new HistoricalEvidence(sourceCallId,sourceTool,sourceEventSequence,sourceFile,sourceBodySha256,validityAtRetrieval,observedRevision,startLine,endLine,truncated,content,UsageScope.HISTORICAL_ONLY);
+        view.currentValidity=java.util.Objects.requireNonNull(validity);return view;
+    }
+    /** Decode only retrieved result lines; legacy raw keeps original line endings. */
+    public String rawSourceExcerpt(ToolExchange source) {
+        if(!sourceTool.equals("read_file") || source==null || !source.call().id().equals(sourceCallId)
+                || !source.result().successful() || !java.util.Objects.equals(sourceFile,source.result().fileFingerprint())
+                || !ArchivedBody.hash(source.result().content()).equals(sourceBodySha256))return null;
+        var metadata=source.result().readMetadata();
+        boolean raw=metadata==null ? "raw".equals(source.call().arguments().get("format")) : metadata.usesRawText(source.call().arguments().get("format"));
+        String text=source.result().content();var offsets=new java.util.ArrayList<Integer>();offsets.add(0);
+        var separators=java.util.regex.Pattern.compile("\\r\\n|\\r|\\n").matcher(text);
+        while(separators.find())offsets.add(separators.end());
+        if(startLine>offsets.size())return null;
+        String selected=text.substring(offsets.get(startLine-1),endLine<offsets.size()?offsets.get(endLine):text.length());
+        if(raw)return selected;
+        var decoded=new StringBuilder();
+        for(String line:selected.split("\\n",-1)) {
+            if(line.matches("\\d+: .*"))decoded.append(line.substring(line.indexOf(": ")+2)).append('\n');
+        }
+        return decoded.isEmpty()?null:decoded.toString();
+    }
 
     @JsonCreator
     public HistoricalEvidence(@JsonProperty("sourceCallId") String sourceCallId,

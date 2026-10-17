@@ -50,7 +50,7 @@ public final class ContextSummary {
         catch (java.io.IOException failure) { throw new IllegalStateException("Cannot encode summary", failure); }
     }
     public com.fasterxml.jackson.databind.node.ObjectNode contextData() {
-        return SummaryContextView.data(revision, "coveredExchanges", coveredExchanges, notes);
+        return SummaryContextView.data(notes);
     }
     public int characterCount() { return contextData().toString().length(); }
     /** A view only; persisted summary and its historical quotations remain intact. */

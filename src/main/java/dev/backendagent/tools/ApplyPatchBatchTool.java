@@ -28,7 +28,7 @@ public final class ApplyPatchBatchTool implements Tool {
             String path=arguments.get("path");var edits=decode(arguments.get("patches"));
             var baseline=workspace.fileFingerprint(path);
             for(var edit:edits)if(!session.hasCurrentPatchSource(path,edit.getOldText(),workspace))
-                return new ToolResult(false,"PATCH_SOURCE_INVALID: 补丁 "+edit.getId()+" 缺少当前有效原文或文件已在批次外改变；本组全部未写入，请raw读取当前文件后基于同一版本重新提交。");
+                return new ToolResult(false,"PATCH_SOURCE_INVALID: 补丁 "+edit.getId()+" 缺少当前有效原文或文件已在批次外改变；本组全部未写入，请用read_file读取当前文件后基于同一版本重新提交，补丁去掉展示行号并保留源码缩进。");
             var result=workspace.applyPatchBatch(path,baseline.getSha256(),edits);
             if(result.successful())session.invalidateFileEvidence(path);
             return result;

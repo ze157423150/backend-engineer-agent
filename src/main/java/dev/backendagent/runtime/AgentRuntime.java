@@ -21,9 +21,11 @@ import static dev.backendagent.runtime.AgentSession.Status.*;
 /** Synchronous, single-worker runtime with an optional persistent session event sink. */
 public final class AgentRuntime {
     private final ModelClient model;
+    private final boolean verificationBasisEnabled;
     private final Map<String, Tool> tools = new LinkedHashMap<>();
     private final ContextAssembler contextAssembler;
     private final int maxModelCalls;
+    private final Set<String> pressureAttempts=new HashSet<>();
     private final ContextBudget configuredHistoryBudget;
     private final int minimumSummaryInputCharacters;
     private final java.util.function.Consumer<String> progress;
@@ -43,6 +45,15 @@ public final class AgentRuntime {
 
     public AgentRuntime(ModelClient model, List<Tool> tools, int maxModelCalls, ContextBudget contextBudget,
                         int minimumSummaryInputCharacters, java.util.function.Consumer<String> progress) {
+        this(model,tools,maxModelCalls,contextBudget,minimumSummaryInputCharacters,progress,true);
+    }
+    public AgentRuntime(ModelClient model,List<Tool> tools,int maxModelCalls,ContextBudget contextBudget,
+            java.util.function.Consumer<String> progress,boolean verificationBasisEnabled) {
+        this(model,tools,maxModelCalls,contextBudget,ContextCompactor.DEFAULT_MIN_INPUT_CHARACTERS,progress,verificationBasisEnabled);
+    }
+    public AgentRuntime(ModelClient model,List<Tool> tools,int maxModelCalls,ContextBudget contextBudget,
+            int minimumSummaryInputCharacters,java.util.function.Consumer<String> progress,boolean verificationBasisEnabled) {
+        this.verificationBasisEnabled=verificationBasisEnabled;
         if (minimumSummaryInputCharacters <= 0) throw new IllegalArgumentException("Minimum summary input must be positive");
         this.minimumSummaryInputCharacters = minimumSummaryInputCharacters;
         this.model = Objects.requireNonNull(model);
@@ -55,6 +66,7 @@ public final class AgentRuntime {
         this.maxModelCalls = maxModelCalls;
         for (Tool tool : tools) {
             String name = Objects.requireNonNull(tool.name());
+            if(!verificationBasisEnabled && name.equals("pin_verification_basis"))continue;
             if (name.isBlank() || this.tools.putIfAbsent(name, tool) != null) {
                 throw new IllegalArgumentException("Invalid or duplicate tool name: " + name);
             }
@@ -94,6 +106,7 @@ public final class AgentRuntime {
     }
 
     private void executeLoop(AgentSession session) {
+        session.setVerificationBasisEnabled(verificationBasisEnabled);
         session.setTestToolAvailable(tools.containsKey("run_tests"));
         Set<String> seenCallIds = new HashSet<>();
         session.history().forEach(exchange -> seenCallIds.addAll(PatchBatchNormalizer.ids(exchange.call())));
@@ -129,12 +142,12 @@ public final class AgentRuntime {
                     session.checkpoint();
                     return;
                 }
-                compactConversationIfNeeded(session);
+                maintainContextBeforeTrimming(session);
                 var prepared = prepareContext(session);
-                int callsBeforeCompaction = session.modelCalls();
-                compactIfNeeded(session, prepared.historyBudget());
-                if (session.modelCalls() != callsBeforeCompaction) { prepared = prepareContext(session); }
-                if (updateVerificationBasisIfNeeded(session,prepared.request())) prepared=prepareContext(session);
+                if (updateVerificationBasisIfNeeded(session,prepared.request())) {
+                    maintainContextBeforeTrimming(session);
+                    prepared=prepareContext(session);
+                }
                 var context = prepared.request();
                 if (prepared.report() != null) {
                     var report = prepared.report();
@@ -207,7 +220,7 @@ public final class AgentRuntime {
 
     /** One automatic refresh per changed relevant input; failures never erase the original task evidence. */
     private boolean updateVerificationBasisIfNeeded(AgentSession session,dev.backendagent.model.ModelRequest context) {
-        if(!model.supportsVerificationUpdates() || !tools.containsKey("pin_verification_basis"))return false;
+        if(!verificationBasisEnabled || !model.supportsVerificationUpdates() || !tools.containsKey("pin_verification_basis"))return false;
         var visible=session.verificationSources(context);
         var previous=context.verificationContext()==null?List.<dev.backendagent.verification.ActiveVerificationBasis>of():
                 context.verificationContext().activeBases().stream().filter(session::isAutomaticVerificationBasis).toList();
@@ -215,18 +228,35 @@ public final class AgentRuntime {
                 session.turns().getLast().getUserMessage(),previous);
         var request=new dev.backendagent.model.VerificationUpdateRequest(session.turns().size(),selected,previous);
         var ledger=session.verificationLedger();
-        if(ledger!=null && ledger.turnId()==request.turnId() && ledger.attemptedDigest().equals(request.digest()))return false;
+        var attemptedFiles=request.fileVersions(ledger!=null&&ledger.turnId()==request.turnId()
+                ?ledger.attemptedFileVersions():Map.of());
+        var triggerDigest=request.digest(attemptedFiles);
+        if(ledger!=null && ledger.turnId()==request.turnId() && ledger.attemptedDigest().equals(triggerDigest))return false;
         if(maxModelCalls-session.modelCalls()<2) {
             session.append(VERIFICATION_UPDATE_SKIPPED,"Insufficient call budget; reserve the task call");
             return false;
         }
         // Save the attempt key first so a malformed response cannot cause an unbounded retry loop.
-        session.installVerificationLedger(new dev.backendagent.verification.VerificationLedger(request.turnId(),request.digest(),previous));
+        session.installVerificationLedger(new dev.backendagent.verification.VerificationLedger(request.turnId(),triggerDigest,previous,attemptedFiles));
         session.countModelCall();
         session.append(VERIFICATION_UPDATE_STARTED,"turn="+request.turnId()+", sources="+selected.size());
         session.checkpoint();
+        boolean installBudgetExceeded=false;
+        boolean compactionNeeded=false;
         try {
-            var updated=request.validate(model.updateVerificationBasis(request));
+            var updated=request.validateCandidate(model.updateVerificationBasis(request));
+            if(dev.backendagent.verification.VerificationLedger.displayCharacters(updated)>dev.backendagent.verification.VerificationLedger.MAX_CHARACTERS) {
+                compactionNeeded=true;
+                if(!model.supportsVerificationCompaction() || maxModelCalls-session.modelCalls()<2)
+                    throw new IllegalArgumentException("Cannot compact basis while reserving task call");
+                var compact=new dev.backendagent.model.VerificationCompactionRequest(request,updated,visible);
+                session.countModelCall();
+                session.append(VERIFICATION_COMPACTION_STARTED,"characters="+dev.backendagent.verification.VerificationLedger.displayCharacters(updated));
+                session.checkpoint();
+                updated=compact.validate(model.compactVerificationBasis(compact));
+                session.append(VERIFICATION_COMPACTION_COMPLETED,"characters="+dev.backendagent.verification.VerificationLedger.displayCharacters(updated));
+            }
+            updated=request.validate(updated);
             var candidate=new dev.backendagent.verification.VerificationContext(request.turnId(),session.verificationState(),
                     session.completionRejections(),context.verificationContext()==null?null:context.verificationContext().getCompletionIssue(),
                     session.latestVerificationTest(),updated);
@@ -234,18 +264,21 @@ public final class AgentRuntime {
                     +(context.contextSummary()==null?0:context.contextSummary().characterCount())
                     +(context.conversationSummary()==null?0:context.conversationSummary().characterCount());
             var report=model.inspectRequest(context.withVerificationContext(candidate));
-            if(protectedCharacters>=configuredHistoryBudget.getMaxHistoryCharacters() || report!=null&&!report.isWithinBudget())
+            if(protectedCharacters>=configuredHistoryBudget.getMaxHistoryCharacters() || report!=null&&!report.isWithinBudget()) {
+                installBudgetExceeded=true;
                 throw new IllegalArgumentException("Verification basis does not fit the task request");
-            session.installVerificationLedger(new dev.backendagent.verification.VerificationLedger(request.turnId(),request.digest(),updated));
+            }
+            session.installVerificationLedger(new dev.backendagent.verification.VerificationLedger(request.turnId(),triggerDigest,updated,attemptedFiles));
         } catch(PersistenceException failure) { throw failure; }
         catch(RuntimeException invalid) {
             if(Thread.currentThread().isInterrupted())throw invalid;
             // Do not persist provider responses, secrets or fabricated quotations in failure diagnostics.
-            var uncertain=previous.stream().map(b->b.status().equals("AVAILABLE")?
-                    new dev.backendagent.verification.ActiveVerificationBasis(b.source(),b.quote(),"UNVERIFIED",
-                            "自动更新未完成，请按本轮用户要求核实是否仍适用",null,null):b).toList();
-            session.installVerificationLedger(new dev.backendagent.verification.VerificationLedger(request.turnId(),request.digest(),uncertain));
-            session.append(VERIFICATION_UPDATE_FAILED,"Automatic basis refresh rejected; original context remains authoritative");
+            // Failure to fit a new view does not invalidate the previously verified sources.
+            // Their file freshness is still checked by the normal session projection.
+            // A failed refresh does not invalidate evidence; preserve the bounded prior state.
+            session.installVerificationLedger(new dev.backendagent.verification.VerificationLedger(request.turnId(),triggerDigest,previous,attemptedFiles));
+            session.append(VERIFICATION_UPDATE_FAILED,"Automatic basis refresh rejected; reasonCode="
+                    +(installBudgetExceeded?"INSTALL_BUDGET":compactionNeeded?"COMPACTION_REJECTED":"UPDATE_VALIDATION")+"; original context remains authoritative");
             progress.accept("本轮依据更新未通过校验，继续使用原始需求与工具证据。");
         }
         session.checkpoint();
@@ -335,6 +368,73 @@ public final class AgentRuntime {
         private dev.backendagent.model.RequestBudgetReport report() { return report; }
     }
 
+    /** Measure the policy window without byte-budget pruning; maintenance precedes final trimming. */
+    private dev.backendagent.model.ModelRequest pressureView(AgentSession session,ContextSummary toolsSummary,ConversationSummary dialogue) {
+        session.refreshVerificationBasis();
+        return new ContextAssembler(configuredHistoryBudget).previewUntrimmed(session,
+                tools.values().stream().map(Tool::definition).toList(),maxModelCalls-session.modelCalls(),toolsSummary,dialogue);
+    }
+    private boolean exceedsRequestBudget(dev.backendagent.model.RequestBudgetReport report) {
+        return report != null && !report.isWithinBudget();
+    }
+    private void requirePressureGain(AgentSession session,ContextSummary toolsSummary,ConversationSummary dialogue) {
+        var before=model.inspectRequest(pressureView(session,session.contextSummary(),session.conversationSummary()));
+        var after=model.inspectRequest(pressureView(session,toolsSummary,dialogue));
+        if(before!=null&&after!=null&&after.getRequestBytes()>=before.getRequestBytes())
+            throw new IllegalArgumentException("Summary does not reduce outgoing request");
+    }
+    private boolean stillUnderPressure(AgentSession session) {
+        return exceedsRequestBudget(model.inspectRequest(pressureView(session,session.contextSummary(),session.conversationSummary())));
+    }
+    private void maintainContextBeforeTrimming(AgentSession session) {
+        var report=model.inspectRequest(pressureView(session,session.contextSummary(),session.conversationSummary()));
+        if(!exceedsRequestBudget(report)) {
+            compactConversationIfNeeded(session);
+            compactIfNeeded(session,configuredHistoryBudget);
+            return;
+        }
+        session.append(CONTEXT_PRESSURE_STARTED,"estimatedInput="+report.getEstimatedInputTokens()
+                +", availableInput="+((long)report.getContextWindowTokens()-report.getOutputTokens()-report.getSafetyMarginTokens())
+                +", reason=REQUEST_BUDGET_EXCEEDED");
+        compactConversationIfNeeded(session,true);
+        if(!stillUnderPressure(session))return;
+        compactIfNeeded(session,configuredHistoryBudget,true);
+        if(!stillUnderPressure(session))return;
+        compactVerificationUnderPressure(session);
+        // Final prepareContext applies oversized-result excerpts and whole-batch suffix trimming.
+    }
+    private boolean pressureAttempted(AgentSession session,String key) {
+        return pressureAttempts.contains(key)||session.events().stream()
+                .anyMatch(e->e.type()==CONTEXT_PRESSURE_ACTION&&e.detail().equals(key));
+    }
+    private boolean reservePressureAttempt(AgentSession session,String key) {
+        if(pressureAttempted(session,key))return false;
+        pressureAttempts.add(key);session.append(CONTEXT_PRESSURE_ACTION,key);return true;
+    }
+    private void compactVerificationUnderPressure(AgentSession session) {
+        var ledger=session.verificationLedger();
+        if(!verificationBasisEnabled||ledger==null||!model.supportsVerificationCompaction()||maxModelCalls-session.modelCalls()<2)return;
+        var view=pressureView(session,session.contextSummary(),session.conversationSummary());
+        var previous=view.verificationContext()==null?List.<dev.backendagent.verification.ActiveVerificationBasis>of():view.verificationContext().activeBases().stream().filter(session::isAutomaticVerificationBasis).toList();
+        int size=dev.backendagent.verification.VerificationLedger.displayCharacters(previous);
+        if(size<1024||!reservePressureAttempt(session,"verification:"+session.turns().size()+":"+ledger.attemptedDigest()))return;
+        var visible=session.verificationSources(view);
+        var selected=dev.backendagent.verification.VerificationSources.updateSources(visible,session.turns().size(),session.currentTask(),previous);
+        var original=new dev.backendagent.model.VerificationUpdateRequest(session.turns().size(),selected,previous);
+        var input=new dev.backendagent.model.VerificationCompactionRequest(original,previous,visible,Math.min(3999,size*3/4));
+        session.countModelCall();session.append(VERIFICATION_COMPACTION_STARTED,"reason=REQUEST_PRESSURE, characters="+size);session.checkpoint();
+        try {
+            var result=input.validate(model.compactVerificationBasis(input));
+            var context=new dev.backendagent.verification.VerificationContext(session.turns().size(),session.verificationState(),session.completionRejections(),view.verificationContext().getCompletionIssue(),session.latestVerificationTest(),result);
+            var before=model.inspectRequest(view);var after=model.inspectRequest(view.withVerificationContext(context));
+            if(before!=null&&after!=null&&after.getRequestBytes()>=before.getRequestBytes())throw new IllegalArgumentException("No request gain");
+            session.installVerificationLedger(new dev.backendagent.verification.VerificationLedger(ledger.turnId(),ledger.attemptedDigest(),result,ledger.attemptedFileVersions()));
+            session.append(VERIFICATION_COMPACTION_COMPLETED,"reason=REQUEST_PRESSURE, characters="+dev.backendagent.verification.VerificationLedger.displayCharacters(result));
+        }catch(PersistenceException fatal){throw fatal;}
+        catch(RuntimeException invalid){if(Thread.currentThread().isInterrupted())throw invalid;session.append(CONTEXT_PRESSURE_FAILED,"stage=verification-refinement; retaining prior state");}
+        session.checkpoint();
+    }
+
     private PreparedContext prepareContext(AgentSession session) {
         return prepareContext(session, session.contextSummary(), true);
     }
@@ -394,10 +494,11 @@ public final class AgentRuntime {
         return best;
     }
 
-    private void compactConversationIfNeeded(AgentSession session) {
+    private void compactConversationIfNeeded(AgentSession session) { compactConversationIfNeeded(session,false); }
+    private void compactConversationIfNeeded(AgentSession session,boolean pressure) {
         if(!model.supportsConversationSummarization() || maxModelCalls-session.modelCalls()<2) return;
         var compactor=new ConversationCompactor(minimumSummaryInputCharacters);
-        var request=compactor.plan(session);if(request==null)return;
+        var request=compactor.plan(session,pressure);if(request==null)return;
         session.append(CONVERSATION_SUMMARY_ATTEMPTED,Integer.toString(request.toIndex()));
         session.transitionTo(COMPACTING);session.countModelCall();
         session.append(CONVERSATION_COMPACTION_STARTED,"call="+session.modelCalls()+", fromTurnIndex="+request.fromIndex()+", toTurnIndex="+request.toIndex());
@@ -410,7 +511,8 @@ public final class AgentRuntime {
                     true, request.toIndex(), values -> compactor.validate(request,values,session)).candidate();
             stage=SummaryRejection.Stage.REQUEST_BUDGET;
             // Use the same adaptive history allowance as the outgoing request before committing.
-            prepareContext(session, session.contextSummary(), candidate, false);
+            if(pressure) requirePressureGain(session,session.contextSummary(),candidate);
+            else prepareContext(session, session.contextSummary(), candidate, false);
         } catch(PersistenceException failure){throw failure;}
         catch(RuntimeException failure){
             session.transitionTo(RUNNING);
@@ -423,11 +525,17 @@ public final class AgentRuntime {
         session.checkpoint();progress.accept("跨轮摘要完成，继续当前要求。");
     }
 
-    private void compactIfNeeded(AgentSession session, ContextBudget effectiveHistoryBudget) {
+    private void compactIfNeeded(AgentSession session, ContextBudget effectiveHistoryBudget) { compactIfNeeded(session,effectiveHistoryBudget,false); }
+    private void compactIfNeeded(AgentSession session,ContextBudget effectiveHistoryBudget,boolean pressure) {
         // Keep one call available for continuing the user's task; fake/legacy clients remain functional.
         if (!model.supportsSummarization() || maxModelCalls - session.modelCalls() < 2) { return; }
         var contextCompactor = new ContextCompactor(effectiveHistoryBudget, minimumSummaryInputCharacters);
-        var plan = contextCompactor.decide(session);
+        // One interval override per user turn; persistent pressure must not summarize every new batch.
+        String earlyKey="tool-early:"+session.turns().size();
+        boolean early=pressure&&!pressureAttempted(session,earlyKey)
+                &&contextCompactor.decide(session,true).getRequest()!=null;
+        if(early)reservePressureAttempt(session,earlyKey);
+        var plan = contextCompactor.decide(session,early);
         if (plan.isSkipped()) {
             session.append(WINDOW_SUMMARY_SKIPPED, Integer.toString(plan.getProcessedEnd()), plan);
             session.checkpoint();
@@ -455,7 +563,8 @@ public final class AgentRuntime {
             deduplication = new SummaryDeduplicator().analyze(validated.notes(), session::originalObservation);
             // Source-valid summaries must also leave room for the next complete outgoing request.
             failureStage = SummaryRejection.Stage.REQUEST_BUDGET;
-            prepareContext(session, candidate, false);
+            if(pressure) requirePressureGain(session,candidate,session.conversationSummary());
+            else prepareContext(session, candidate, false);
         } catch (PersistenceException failure) {
             throw failure;
         } catch (RuntimeException failure) {
@@ -508,9 +617,7 @@ public final class AgentRuntime {
     }
 
     private int summaryDisplayCharacters(AgentSession session, List<SummaryNote> notes, boolean conversation, int coverage) {
-        int revision = conversation ? session.conversationSummary()==null?1:session.conversationSummary().getRevision()+1
-                : session.contextSummary()==null?1:session.contextSummary().getRevision()+1;
-        var view=SummaryContextView.data(revision,conversation?"coveredTurns":"coveredExchanges",coverage,notes);
+        var view=SummaryContextView.data(notes);
         if(conversation) for(var section:view.path("sections")) for(var item:section)
             dev.backendagent.model.ConversationMessage.annotateSource(
                     (com.fasterxml.jackson.databind.node.ObjectNode)item,item.path("sourceCallId").asText());

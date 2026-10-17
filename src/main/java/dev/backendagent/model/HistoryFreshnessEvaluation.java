@@ -106,6 +106,8 @@ public final class HistoryFreshnessEvaluation {
                         public RequestBudgetReport inspectRequest(ModelRequest request) { return client.inspectRequest(request); }
                         public boolean supportsSummarization() { return client.supportsSummarization(); }
                         public boolean supportsVerificationUpdates() { return client.supportsVerificationUpdates(); }
+            public boolean supportsVerificationCompaction() { return client.supportsVerificationCompaction(); }
+            public java.util.List<dev.backendagent.verification.ActiveVerificationBasis> compactVerificationBasis(VerificationCompactionRequest request) { return client.compactVerificationBasis(request); }
                         public java.util.List<dev.backendagent.verification.ActiveVerificationBasis> updateVerificationBasis(VerificationUpdateRequest request) { return client.updateVerificationBasis(request); }
                         public boolean supportsSummaryRefinement() { return client.supportsSummaryRefinement(); }
                         public List<SummaryNote> refineSummary(SummaryRefinementRequest request) { return client.refineSummary(request); }
@@ -187,10 +189,10 @@ public final class HistoryFreshnessEvaluation {
             }
         }
         boolean outputCorrect = false;
-        var output = workspace.readFile("audit/result.json", "1", "200");
+        var output = workspace.readFile("audit/result.json", "1", "200", "raw");
         if (output.successful()) {
-            // Read via the worker, remove its numbered-line envelope; no host execution of generated output.
-            String data = output.content().lines().filter(x -> x.matches("[0-9]+:.*")).map(x -> x.substring(x.indexOf(':') + 2)).reduce("", (a,b) -> a + b + "\n");
+            // Read current raw JSON through the worker; never execute generated output.
+            String data = output.content();
             try {
                 var node = JSON.reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(data);
                 outputCorrect = node.isObject() && node.size() == 7 && node.path("receiptId").asText().equals(receipt)

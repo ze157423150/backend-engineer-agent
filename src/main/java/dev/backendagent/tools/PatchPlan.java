@@ -15,7 +15,7 @@ public final class PatchPlan {
             int start=before.indexOf(edit.getOldText());
             if(start<0){
                 String hint=before.replaceAll("(?m)^[ \\t]+", "").contains(edit.getOldText().replaceAll("(?m)^[ \\t]+", ""))?"疑似缩进不一致；":"";
-                throw new IllegalArgumentException(hint+"PATCH_BASELINE_MISSING: 补丁 "+edit.getId()+" 的old_text在共同基线中不存在；本组全部未写入。所有补丁须基于同一原文，不能依赖前一补丁生成的新文本；请read_file(format=raw)读取后合并或分轮提交。");
+                throw new IllegalArgumentException(hint+"PATCH_BASELINE_MISSING: 补丁 "+edit.getId()+" 的old_text在共同基线中不存在；本组全部未写入。所有补丁须基于同一原文，不能依赖前一补丁生成的新文本；请read_file读取后合并或分轮提交。");
             }
             if(before.indexOf(edit.getOldText(),start+1)>=0)throw new IllegalArgumentException("PATCH_AMBIGUOUS: 补丁 "+edit.getId()+" 的旧文本匹配多处；本组全部未写入，请增加定位上下文。");
             ranges.add(new Range(edit,start,start+edit.getOldText().length()));

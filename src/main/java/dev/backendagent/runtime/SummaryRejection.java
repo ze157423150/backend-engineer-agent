@@ -57,6 +57,7 @@ public final class SummaryRejection {
             case "Summary quote was not in summary input" -> "QUOTE_NOT_IN_INPUT";
             case "Summary refinement source is not in original input" -> "REFINEMENT_INVALID_SOURCE";
             case "Summary refinement changed source" -> "REFINEMENT_CHANGED_SOURCE";
+            case "Summary does not reduce outgoing request" -> "NO_COMPRESSION_GAIN";
             case "Summary exceeds reserved budget" -> "SUMMARY_BUDGET_EXCEEDED";
             case "Summary does not reduce replaced context" -> "NO_COMPRESSION_GAIN";
             case "DeepSeek request timed out" -> "MODEL_TIMEOUT";

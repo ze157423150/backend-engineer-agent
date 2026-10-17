@@ -13,7 +13,19 @@ public record VerificationUpdateRequest(int turnId, List<VerificationSource> sou
             throw new IllegalArgumentException("Verification updates accept requirements, dialogue summaries and read contract documents only");
     }
     public String digest() {
-        return dev.backendagent.history.ArchivedBody.hash(VerificationState.encode(List.of(turnId, sources)));
+        return digest(fileVersions(Map.of()));
+    }
+    /** Cumulative versions prevent eviction/re-reading and new call IDs from retriggering maintenance. */
+    public Map<String,String> fileVersions(Map<String,String> attempted) {
+        var versions=new TreeMap<>(attempted);
+        for(var source:sources)if(source.kind().equals("FILE")&&source.file()!=null)
+            versions.put(source.file().getPath(),source.file().getSha256());
+        return Collections.unmodifiableMap(versions);
+    }
+    public String digest(Map<String,String> versions) {
+        var current=sources.stream().filter(s->s.userRequirement()&&s.turnId()==turnId)
+                .map(VerificationSource::content).findFirst().orElse("");
+        return dev.backendagent.history.ArchivedBody.hash(VerificationState.encode(List.of(turnId,current,new TreeMap<>(versions))));
     }
     /** Minimal transport view; hashes and original source objects remain local for validation/recovery. */
     public static com.fasterxml.jackson.databind.node.ObjectNode sourceData(VerificationSource source) {
@@ -32,12 +44,7 @@ public record VerificationUpdateRequest(int turnId, List<VerificationSource> sou
         input.set("currentTask",current.map(VerificationUpdateRequest::sourceData).orElseGet(json::createObjectNode));
         var existing=input.putArray("previousBasis");
         for(var b:previous) {
-            var item=existing.addObject().put("source",b.source().id()).put("quote",b.quote()).put("status",b.status());
-            if(b.status().equals("UNVERIFIED")&&!b.reason().isBlank())item.put("reason",b.reason());
-            if(b.replacement()!=null) {
-                item.put("replacedBy",b.replacement().id());
-                item.put("replacementQuote",b.replacementQuote());
-            }
+            existing.add(basisData(b));
         }
         var history=input.putArray("history");var contracts=input.putArray("contracts");
         for(var s:sources) {
@@ -53,15 +60,33 @@ public record VerificationUpdateRequest(int turnId, List<VerificationSource> sou
         }
         return input;
     }
+    /** Shared input/output entry shape; provenance metadata remains outside the basis entry. */
+    public static com.fasterxml.jackson.databind.node.ObjectNode basisData(ActiveVerificationBasis basis) {
+        var item=new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
+                .put("source",basis.source().id()).put("quote",basis.quote()).put("status",basis.status());
+        if(basis.status().equals("UNVERIFIED")&&!basis.reason().isBlank())item.put("reason",basis.reason());
+        if(basis.replacement()!=null)item.put("replacedBy",basis.replacement().id()).put("replacementQuote",basis.replacementQuote());
+        return item;
+    }
     public java.util.List<ActiveVerificationBasis> validate(java.util.List<ActiveVerificationBasis> bases) {
+        validateCandidate(bases);
+        var unique = new HashSet<String>();
+        for(var b:bases)if(!unique.add(b.source().id()+"\n"+b.quote()))
+            throw new IllegalArgumentException("Duplicate verification basis");
+        if(VerificationLedger.displayCharacters(bases)>VerificationLedger.MAX_CHARACTERS)
+            throw new IllegalArgumentException("Verification basis display exceeds budget");
+        new VerificationLedger(turnId,digest(),bases);
+        return List.copyOf(bases);
+    }
+    /** Validate provenance before deciding whether an oversized, possibly repetitive candidate needs compaction. */
+    public java.util.List<ActiveVerificationBasis> validateCandidate(java.util.List<ActiveVerificationBasis> bases) {
         var allowed = new HashSet<>(sources);
         // Carried sources are permitted as provenance, but do not make obsolete content visible again.
         previous.forEach(b -> { allowed.add(b.source()); if(b.replacement()!=null) allowed.add(b.replacement()); });
-        var unique = new HashSet<String>();
         for(var b : bases) {
             if(!VerificationSources.isUpdateSource(b.source()))throw new IllegalArgumentException("Implementation is not a verification requirement");
-            if (!allowed.contains(b.source()) || b.replacement()!=null && !allowed.contains(b.replacement())
-                    || !unique.add(b.source().id()+"\n"+b.quote())) throw new IllegalArgumentException("Invalid basis provenance");
+            if (!allowed.contains(b.source()) || b.replacement()!=null && !allowed.contains(b.replacement()))
+                throw new IllegalArgumentException("Invalid basis provenance");
             if(!sources.contains(b.source()) && previous.stream().noneMatch(p->p.source().equals(b.source())&&p.quote().contains(b.quote())))
                 throw new IllegalArgumentException("Carried basis cannot expand into hidden source text");
             if(b.status().equals("AVAILABLE") && b.source().file()!=null && (sources.stream()
@@ -70,7 +95,6 @@ public record VerificationUpdateRequest(int turnId, List<VerificationSource> sou
                         &&java.util.Set.of("STALE","UNVERIFIED").contains(p.status()))))
                 throw new IllegalArgumentException("Cannot promote an invalidated file basis");
         }
-        new VerificationLedger(turnId,digest(),bases);
         return List.copyOf(bases);
     }
 }

@@ -102,7 +102,8 @@ class HistoricalRetrievalSynchronizationTest {
         assertTrue(summary.path("summary").path("sections").has("FINDINGS"));
         assertTrue(java.util.stream.StreamSupport.stream(body.path("messages").spliterator(), false)
                 .anyMatch(m -> m.path("role").asText().equals("assistant")
-                        && m.path("content").asText().startsWith("[HISTORICAL_ASSISTANT_ANSWER: UNVERIFIED]")));
+                        && m.path("content").asText().startsWith("[历史回答 turn-1-answer；样例数值仅适用当时输入]")
+                        && m.path("content").asText().contains("[HISTORICAL_ASSISTANT_ANSWER: UNVERIFIED]")));
         assertEquals("[STALE_OBSERVATION_BODY_OMITTED] 未取回原文", request.turns().getFirst().getAnswer());
         assertEquals(body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
                 client.inspectRequest(request).getRequestBytes());

@@ -241,6 +241,8 @@ public final class RealModelEvaluation {
             }
             public boolean supportsSummarization() { return !full; }
             public boolean supportsVerificationUpdates() { return client.supportsVerificationUpdates(); }
+            public boolean supportsVerificationCompaction() { return client.supportsVerificationCompaction(); }
+            public java.util.List<dev.backendagent.verification.ActiveVerificationBasis> compactVerificationBasis(VerificationCompactionRequest request) { return client.compactVerificationBasis(request); }
             public java.util.List<dev.backendagent.verification.ActiveVerificationBasis> updateVerificationBasis(VerificationUpdateRequest request) { return client.updateVerificationBasis(request); }
             public boolean supportsSummaryRefinement() { return !full && client.supportsSummaryRefinement(); }
             public List<SummaryNote> refineSummary(SummaryRefinementRequest request) {

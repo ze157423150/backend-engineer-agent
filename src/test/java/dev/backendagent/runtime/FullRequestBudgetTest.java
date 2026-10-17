@@ -40,7 +40,7 @@ class FullRequestBudgetTest {
             }
         };
         new AgentRuntime(model, List.of(), 2, new ContextBudget(20000)).run(session);
-        assertEquals(AgentSession.Status.COMPLETED, session.status());
+        assertEquals(AgentSession.Status.COMPLETED, session.status(),session.events().getLast().detail());
         assertEquals(original, session.history());
         assertTrue(session.events().stream().anyMatch(e -> e.type() == AgentSession.EventType.REQUEST_BUDGET_CHECKED));
         session.contextProjection().validateAgainst(original);
@@ -102,7 +102,7 @@ class FullRequestBudgetTest {
             }
         };
         new AgentRuntime(model, List.of(), 3, new ContextBudget(20000)).run(session);
-        assertEquals(AgentSession.Status.COMPLETED, session.status());
+        assertEquals(AgentSession.Status.COMPLETED, session.status(),session.events().getLast().detail());
         assertEquals(1, summaries.get());
         assertEquals(2, session.modelCalls());
     }
@@ -125,12 +125,12 @@ class FullRequestBudgetTest {
             }
         };
         new AgentRuntime(model, List.of(), 3, new ContextBudget(20000)).run(session);
-        assertEquals(AgentSession.Status.COMPLETED, session.status());
+        assertEquals(AgentSession.Status.COMPLETED, session.status(),session.events().getLast().detail());
         assertNull(session.contextSummary());
         assertEquals(2, session.modelCalls());
         var rejection = session.events().stream().filter(e -> e.type() == AgentSession.EventType.COMPACTION_FAILED).findFirst().orElseThrow();
         assertTrue(rejection.detail().contains("stage=REQUEST_BUDGET"));
-        assertTrue(rejection.detail().contains("reasonCode=REQUEST_BUDGET_CHECK_FAILED"));
+        assertTrue(rejection.detail().contains("reasonCode=NO_COMPRESSION_GAIN"));
     }
 
 }

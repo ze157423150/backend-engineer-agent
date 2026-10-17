@@ -21,6 +21,19 @@ class HistoricalEvidenceNoticeTest {
         return HistoricalEvidence.excerpt(source(id, "old first\nold second\nold third"), 10, Validity.STALE, start, end);
     }
 
+    @Test void wireScopeUsesCurrentRevalidationInsteadOfRetrievalTimeValidity() {
+        var json=new com.fasterxml.jackson.databind.ObjectMapper();
+        var old=excerpt("original",2,2);
+        var current=old.withCurrentValidity(Validity.CURRENT);
+        var entry=HistoricalEvidenceNotice.entries(json,List.of(current)).get(0);
+        assertEquals("CURRENT_FILE",entry.path("usageScope").asText());
+        assertEquals("CURRENT",entry.path("currentValidity").asText());
+        assertEquals("STALE",entry.path("validityAtRetrieval").asText());
+        var stale=current.withCurrentValidity(Validity.STALE);
+        assertEquals("HISTORICAL_ONLY",HistoricalEvidenceNotice.entries(json,List.of(stale)).get(0).path("usageScope").asText());
+        assertFalse(json.valueToTree(current).has("currentValidity")); // Dynamic validity must not alter durable provenance.
+        assertEquals("CURRENT_FILE",HistoricalEvidenceNotice.currentRetrievals(json,List.of(current)).get(0).path("usageScope").asText());
+    }
     @Test void pointsBothOriginalAndRetrievalPlaceholderToTheRetainedExcerpt() {
         var evidence = List.of(excerpt("original", 2, 2));
         for (var exchange : List.of(hidden("original", "read_file", "unused"),

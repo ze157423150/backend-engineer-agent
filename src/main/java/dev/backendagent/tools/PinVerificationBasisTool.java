@@ -28,7 +28,7 @@ public final class PinVerificationBasisTool implements Tool {
             if(!result.fileFingerprint().equals(workspace.fileFingerprint(result.fileFingerprint().getPath())))
                 return new ToolResult(false,"依据文件指纹已变化，请重新读取");
             var lines=new TreeMap<Integer,String>();
-            if("raw".equals(source.call().arguments().get("format"))){
+            if(metadata.usesRawText(source.call().arguments().get("format"))){
                 String[] text=result.content().split("\n",-1);
                 for(int i=0;i<text.length;i++)lines.put(metadata.getStartLine()+i,text[i]);
             }else{

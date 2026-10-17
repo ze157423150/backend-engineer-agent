@@ -40,7 +40,7 @@ public final class ConversationSummary {
         catch (java.io.IOException failure) { throw new IllegalStateException("Cannot encode conversation summary", failure); }
     }
     public com.fasterxml.jackson.databind.node.ObjectNode contextData() {
-        var view = SummaryContextView.data(revision, "coveredTurns", coveredTurns, notes);
+        var view = SummaryContextView.data(notes);
         for (var section : view.path("sections")) {
             for (var item : section) {
                 ConversationMessage.annotateSource((com.fasterxml.jackson.databind.node.ObjectNode) item,

@@ -37,7 +37,8 @@ public final class ContextWindowPolicy {
         // A checkpoint may carry still-valid older facts; only raw candidates use the middle window.
         var sources = history.stream().collect(java.util.stream.Collectors.toMap(e -> e.call().id(), e -> e));
         var notes = summary.getNotes().stream().filter(note -> !stale.contains(note.getSourceCallId())
-                && sources.containsKey(note.getSourceCallId()) && SummarySourcePolicy.substantive(sources.get(note.getSourceCallId()))).toList();
+                && sources.containsKey(note.getSourceCallId()) && SummarySourcePolicy.substantive(sources.get(note.getSourceCallId()))
+                && !SummarySourcePolicy.resolvedExecutionIssue(note,history)).toList();
         return notes.isEmpty() ? null : new ContextSummary(summary.getRevision(), summary.getCoveredExchanges(), notes);
     }
 }

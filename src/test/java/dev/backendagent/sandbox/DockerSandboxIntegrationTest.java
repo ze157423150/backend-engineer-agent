@@ -18,7 +18,7 @@ class DockerSandboxIntegrationTest {
                 Files.createDirectory(root.resolve("session")),new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);
         var session=new dev.backendagent.runtime.AgentSession("edit twice");var step=new java.util.concurrent.atomic.AtomicInteger();
         new dev.backendagent.runtime.AgentRuntime(q->switch(step.getAndIncrement()){
-            case 0->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("r","read_file",java.util.Map.of("path","Main.java","start_line","1","end_line","10","format","raw")));
+            case 0->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("r","read_file",java.util.Map.of("path","Main.java","start_line","1","end_line","10")));
             case 1->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("p","apply_patch",java.util.Map.of("path","Main.java","old_text","n=1","new_text","n=2")));
             case 2->{assertNotNull(q.history().getLast().result().fileFingerprint());yield dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("p2","apply_patch",java.util.Map.of("path","Main.java","old_text","n=2","new_text","n=3")));}
             default->dev.backendagent.model.ModelResponse.finish("done");
@@ -86,7 +86,7 @@ class DockerSandboxIntegrationTest {
         var sessionDir=Files.createDirectory(root.resolve("session"));var w=DockerWorkspace.create(new Workspace(source,source.resolve("private.properties")),sessionDir,new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);
         var session=new dev.backendagent.runtime.AgentSession("edit");var step=new java.util.concurrent.atomic.AtomicInteger();
         new dev.backendagent.runtime.AgentRuntime(r->switch(step.getAndIncrement()){
-            case 0,2->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("read"+step.get(),"read_file",java.util.Map.of("path","Main.java","start_line","1","end_line","10","format","raw")));
+            case 0,2->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("read"+step.get(),"read_file",java.util.Map.of("path","Main.java","start_line","1","end_line","10")));
             case 1->dev.backendagent.model.ModelResponse.callTools(java.util.List.of(new dev.backendagent.model.ToolCall("a","apply_patch",java.util.Map.of("path","Main.java","old_text","a=1","new_text","a=10")),new dev.backendagent.model.ToolCall("b","apply_patch",java.util.Map.of("path","Main.java","old_text","b=2","new_text","b=20"))),null);
             case 3->dev.backendagent.model.ModelResponse.callTools(java.util.List.of(new dev.backendagent.model.ToolCall("whole","apply_patch",java.util.Map.of("path","Main.java","old_text","a=10; int b=20","new_text","a=30; int b=40")),new dev.backendagent.model.ToolCall("part","apply_patch",java.util.Map.of("path","Main.java","old_text","b=20","new_text","b=50"))),null);
             default->{assertTrue(r.history().getLast().result().content().contains("PATCH_OVERLAP"));assertTrue(r.history().getLast().result().content().contains("whole"));assertTrue(r.history().getLast().result().content().contains("全部未写入"));yield dev.backendagent.model.ModelResponse.finish("done");}
@@ -115,6 +115,10 @@ class DockerSandboxIntegrationTest {
         Path session=Files.createDirectory(root.resolve("session"));
         var w=DockerWorkspace.create(new Workspace(source,source.resolve("agent-local.properties")),session,
                 new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);
+        var numbered=w.readFile("Main.java","2","2");
+        assertTrue(numbered.successful(),numbered.content());
+        assertEquals("file=Main.java, totalLines=3\n2:   int n = 1;\n",numbered.content());
+        assertEquals("numbered",numbered.readMetadata().getFormat());
         var raw=w.readFile("Main.java","2","2","raw");
         assertTrue(raw.successful(),raw.content());
         assertEquals("  int n = 1;\r\n",raw.content());

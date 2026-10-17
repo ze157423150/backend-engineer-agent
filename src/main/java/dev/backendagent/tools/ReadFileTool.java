@@ -11,16 +11,14 @@ public final class ReadFileTool implements Tool {
     public String name() { return "read_file"; }
 
     public ToolDefinition definition() {
-        return new ToolDefinition(name(), "按行读取真实文件，正文与readMetadata定位信息分开，保留完整文件字节的SHA-256证据。每次最多200行；优先一次读取完整方法或测试块。",
-                Map.of("path", "根据 list_files 或 search_code 结果选择的工作区相对文件路径",
-                        "start_line", "起始行号，从 1 开始，例如 1",
-                        "end_line", "结束行号，包含该行，例如 120",
-                        "format", "可选，numbered（默认）带行号；raw仅返回原始源码，保留缩进和换行，构造精确补丁必须用raw"),
-                java.util.Set.of("path", "start_line", "end_line"));
+        return new ToolDefinition(name(), "按行读取文件，返回file头和源码行号；每次最多200行，附实际范围及文件指纹。补丁文本需去掉展示行号，保留源码缩进；已有有效片段直接复用。",
+                Map.of("path", "工作区相对文件路径",
+                        "start_line", "起始行，1起",
+                        "end_line", "结束行，含该行"));
     }
 
     public ToolResult execute(Map<String, String> arguments) {
-        ToolResult result=workspace.readFile(arguments.get("path"), arguments.get("start_line"), arguments.get("end_line"), arguments.get("format"));
+        ToolResult result=workspace.readFile(arguments.get("path"), arguments.get("start_line"), arguments.get("end_line"));
         if(result.successful()&&result.readMetadata()!=null&&result.fileFingerprint()!=null){
             var coverage=new dev.backendagent.model.ReadCoverage();
             for(var read:recentReads)coverage.observe(read.file,read.range);

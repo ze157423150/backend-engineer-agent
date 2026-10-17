@@ -7,6 +7,23 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class WorkspaceRawReadTest {
     @TempDir Path root;
+    @Test void defaultNumberedMetadataRoundTripsWithoutReinterpretingSourceLinePrefixes() throws Exception {
+        var w=new Workspace(root,root.resolve("agent-local.properties"));
+        Files.writeString(root.resolve("note.txt"),"1: literal source text\r\nnext\r\n");
+        var result=new ReadFileTool(w).execute(java.util.Map.of("path","note.txt","start_line","1","end_line","2"));
+        assertEquals("file=note.txt, totalLines=2\n1: 1: literal source text\n2: next\n",result.content());
+        assertEquals("numbered",result.readMetadata().getFormat());
+        var json=new com.fasterxml.jackson.databind.ObjectMapper();
+        var restored=json.readValue(json.writeValueAsString(result),dev.backendagent.model.ToolResult.class);
+        assertEquals(result,restored);
+        assertEquals("numbered",restored.readMetadata().repeated(true).getFormat());
+        assertEquals("numbered",restored.readMetadata().excerpt().getFormat());
+        var legacy=json.readValue("{\"totalLines\":2,\"startLine\":1,\"endLine\":2,\"reachedEndOfFile\":true,\"bodyComplete\":true,\"previouslyRead\":false}",dev.backendagent.model.FileReadMetadata.class);
+        assertNull(legacy.getFormat());
+        assertTrue(legacy.usesRawText("raw"));
+        assertFalse(restored.readMetadata().usesRawText("raw"));
+        assertFalse(json.readTree(json.writeValueAsString(legacy)).has("format"));
+    }
     @Test void rawPreservesIndentationCrLfTabsAndFinalNewlineForExactPatch() throws Exception {
         var w=new Workspace(root,root.resolve("agent-local.properties"));
         String original="class X {\r\n\t void m() {\r\n  int n = 1;\r\n }\r\n}";
@@ -30,13 +47,14 @@ class WorkspaceRawReadTest {
         assertFalse(w.readFile("X.java","1","1","raw").successful());
         assertFalse(w.readFile("X.java","2","2","raw").successful());
         assertFalse(w.readFile("X.java","1","1","other").successful());
+        assertTrue(w.readFile("X.java","1","1","numbered").successful());
     }
-    @Test void indentationFailureSuggestsRawButNeverChangesFile() throws Exception {
+    @Test void indentationFailureSuggestsReadButNeverChangesFile() throws Exception {
         var w=new Workspace(root,root.resolve("agent-local.properties"));
         Files.writeString(root.resolve("X.java"),"  int n = 1;\n");
         var result=w.applyPatch("X.java","   int n = 1;\n","replaced");
         assertFalse(result.successful()); assertTrue(result.content().contains("疑似缩进"));
-        assertTrue(result.content().contains("format=raw"));
+        assertTrue(result.content().contains("read_file"));
         assertEquals("  int n = 1;\n",Files.readString(root.resolve("X.java")));
     }
 }

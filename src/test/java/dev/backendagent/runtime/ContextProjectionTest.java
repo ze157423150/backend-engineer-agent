@@ -93,7 +93,7 @@ class ContextProjectionTest {
         var projection = project(session(original, latest), 600);
         assertEquals(List.of(latest), projection.getHistory());
         assertEquals(1, projection.getOmittedExchanges());
-        assertTrue(projection.getRecoveryReferences().contains("call_id=old"));
+        assertFalse(projection.getRecoveryReferences().contains("call_id=old")); // Still within the recent four batches.
         assertTrue(projection.getHistoryCharacters() <= 600);
         assertEquals(new ContextBudget(600).measure(latest) + projection.getRecoveryReferences().length(),
                 projection.getHistoryCharacters());

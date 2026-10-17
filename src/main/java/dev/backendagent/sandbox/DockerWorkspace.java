@@ -66,7 +66,7 @@ public final class DockerWorkspace implements WorkspaceAccess {
     }
     public String rootPath() { return root.toString(); }
     public ToolResult listFiles(String path) { return tool("list_files", Map.of("path", path), false); }
-    public ToolResult readFile(String path, String start, String end) { return tool("read_file", Map.of("path", path, "start_line", start, "end_line", end), false); }
+    public ToolResult readFile(String path, String start, String end) { return tool("read_file", Map.of("path", path, "start_line", start, "end_line", end, "format", "numbered"), false); }
     public ToolResult readFile(String path, String start, String end, String format) {
         return format == null ? readFile(path, start, end)
                 : tool("read_file", Map.of("path", path, "start_line", start, "end_line", end, "format", format), false);

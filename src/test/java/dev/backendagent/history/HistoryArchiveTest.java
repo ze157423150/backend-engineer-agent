@@ -55,7 +55,7 @@ class HistoryArchiveTest {
                             assertEquals("old-read", match.path("callId").asText());
                             assertEquals("STALE", match.path("validity").asText());
                             assertFalse(match.path("snippet").asText().contains("ORIGINAL_VALUE"));
-                            assertEquals(3, match.path("matchedLine").asInt()); // Header, first line, second line.
+                            assertEquals(3, match.path("matchedLine").asInt()); // Tool result line includes the presentation header.
                         } catch (java.io.IOException failure) { throw new AssertionError(failure); }
                         return ModelResponse.callTool(new ToolCall("recover", "read_observation",
                                 Map.of("call_id", "old-read", "start_line", "3", "end_line", "3")));

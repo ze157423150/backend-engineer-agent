@@ -273,7 +273,7 @@ class SessionCheckpointTest {
             // The checkpoint includes the third tool result and the last view sent before that result.
             id = session.id();
             assertEquals(2, session.contextProjection().getCompressedExchanges());
-            assertEquals(6, session.contextProjection().getPolicyVersion());
+            assertEquals(7, session.contextProjection().getPolicyVersion());
         }
         try (var store = new FileSessionStore(data())) {
             var restored = store.restore(id, workspace(), 4);

@@ -42,6 +42,11 @@ class DeepSeekModelClientTest {
         assertEquals("不修改公共接口",notes.getFirst().getEvidenceQuote());
         var body=requests.getLast();assertFalse(body.has("tools"));
         var data=json.readTree(body.path("messages").get(1).path("content").asText());
+        assertFalse(data.has("evidence"));assertFalse(data.toString().contains("不修改公共接口"));
+        assertEquals("E1",data.path("sourceCosts").get(0).path("evidenceId").asText());
+        assertTrue(data.path("sourceCosts").get(0).path("itemMetadataCharacters").asInt()>40);
+        assertEquals(160,data.path("fixedMetadataReserve").asInt());
+        assertEquals(1620,data.path("recommendedStatementCharacters").asInt());
         assertEquals(288,data.path("excessCharacters").asInt());
         assertEquals(3600,data.path("targetCharacters").asInt());assertFalse(data.has("objective"));
     }
@@ -109,6 +114,13 @@ class DeepSeekModelClientTest {
         String prompt=body.path("messages").get(0).path("content").asText();
         assertTrue(prompt.contains("每轮自动更新"));assertTrue(prompt.contains("SUPERSEDED/STALE只作历史提醒"));
         assertTrue(prompt.contains("workspace_validation_state保存当前测试状态及诊断"));
+        assertTrue(prompt.contains("实现、测试源码及其注释和断言是待核查对象"));
+        assertTrue(prompt.contains("历史样例的数值只适用于当时输入"));
+        assertTrue(prompt.contains("修改已通过用例应有需求变更或明确契约理由"));
+        var validation=json.readTree(java.util.stream.StreamSupport.stream(body.path("messages").spliterator(),false)
+                .map(m->m.path("content").asText()).filter(t->t.startsWith("{\"kind\":\"workspace_validation_state\""))
+                .findFirst().orElseThrow());
+        assertTrue(validation.path("notice").asText().contains("expected来自现有断言，actual来自实现"));
     }
     @Test void ordinaryVerificationBasisDoesNotRequireExplanatoryReason() throws Exception {
         var source=new dev.backendagent.verification.VerificationSource("turn-1-user","USER",1,"429仍计入4xx桶",null,"CURRENT");
@@ -118,15 +130,43 @@ class DeepSeekModelClientTest {
         var data=json.readTree(requests.getLast().path("messages").get(1).path("content").asText());
         assertEquals(4,data.size());assertFalse(data.toString().contains("CURRENT"));
     }
-    @Test void rawFormatIsOptionalAndFlowsThroughProtocolToWorkspace() throws Exception {
-        responses.add(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":1,\"end_line\":20,\"format\":\"raw\"}"));
+    @Test void verificationProtocolAcceptsMoreThanTwelveAndCompactsWithSameSchema() throws Exception {
+        var source=new dev.backendagent.verification.VerificationSource("turn-1-user","USER",1,"abcdefghijklmnopqrstuvwxyz"+"x".repeat(600),null,"CURRENT");
+        var input=new VerificationUpdateRequest(1,List.of(source),List.of());
+        var output=json.createObjectNode();var entries=output.putArray("bases");
+        for(char c='a';c<='z';c++)entries.addObject().put("source",source.id()).put("quote",String.valueOf(c)).put("status","AVAILABLE");
+        responses.add(finalResponse(output.toString()));
+        assertEquals(26,input.validate(client(Duration.ofSeconds(5)).updateVerificationBasis(input)).size());
+        var basis=new dev.backendagent.verification.ActiveVerificationBasis(source,source.content(),"AVAILABLE","",null,null);
+        var compact=new VerificationCompactionRequest(input,java.util.Collections.nCopies(12,basis),List.of(source));
+        responses.add(finalResponse("{\"bases\":[{\"source\":\"turn-1-user\",\"quote\":\"abc\",\"status\":\"AVAILABLE\"}]}"));
+        assertEquals("abc",client(Duration.ofSeconds(5)).compactVerificationBasis(compact).getFirst().quote());
+        var wire=requests.getLast();assertFalse(wire.has("tools"));
+        var prompt=wire.path("messages").get(0).path("content").asText();
+        assertTrue(prompt.contains("不设置条数目标或条数上限"));assertFalse(prompt.contains("最多12条"));
+        var data=json.readTree(wire.path("messages").get(1).path("content").asText());
+        assertEquals(3999,data.path("maxOutputCharacters").asInt());
+    }
+    @Test void summarizedAnswerDoesNotReturnWhenItsOldToolsRemainVisible() throws Exception {
+        var old=new dev.backendagent.runtime.ConversationTurn(1,"旧需求",AgentSession.Status.COMPLETED,"OLD_ANSWER_SHOULD_NOT_REAPPEAR",0,1);
+        var current=new dev.backendagent.runtime.ConversationTurn(2,"当前需求",AgentSession.Status.RUNNING,null,1,1);
+        var summary=new dev.backendagent.runtime.ConversationSummary(1,1,List.of(new dev.backendagent.runtime.SummaryNote(dev.backendagent.runtime.SummaryNote.Kind.PROGRESS,"旧轮需求","turn-1-user","旧需求")));
+        var read=new ToolExchange(new ToolCall("old-visible-tool","read_file",java.util.Map.of("path","A.java")),new ToolResult(true,"class A {}"),null,1);
+        var request=new ModelRequest("当前需求",List.of(read),List.of(),5,0,0,List.of(),null,null,java.util.Set.of(),dev.backendagent.runtime.WorkspaceState.initial(),List.of(),List.of(old,current),summary,2);
+        var body=client(Duration.ofSeconds(5)).buildRequest(request).toString();
+        assertTrue(body.contains("old-visible-tool"));assertFalse(body.contains("OLD_ANSWER_SHOULD_NOT_REAPPEAR"));
+        assertFalse(dev.backendagent.verification.VerificationSources.visible(request).stream().anyMatch(x->x.id().equals("turn-1-answer")));
+    }
+    @Test void numberedIsTheOnlyModelFacingReadFormat() throws Exception {
+        responses.add(toolResponse("{\"path\":\"OrderService.java\",\"start_line\":1,\"end_line\":20}"));
         responses.add(finalResponse("done"));
-        var session=new AgentSession("inspect raw");
+        var session=new AgentSession("inspect numbered");
         new AgentRuntime(client(Duration.ofSeconds(5)),List.of(readTool),3).run(session);
         assertEquals(AgentSession.Status.COMPLETED,session.status());
-        assertEquals(Files.readString(repository.resolve("OrderService.java")),session.history().getFirst().result().content());
+        assertEquals("file=OrderService.java, totalLines=1\n1: "+Files.readString(repository.resolve("OrderService.java")).stripTrailing()+"\n",session.history().getFirst().result().content());
+        assertEquals("numbered",session.history().getFirst().result().readMetadata().getFormat());
         var schema=requests.getFirst().path("tools").get(0).path("function").path("parameters");
-        assertTrue(schema.path("properties").has("format"));
+        assertFalse(schema.path("properties").has("format"));
         assertFalse(schema.path("required").toString().contains("format"));
         var toolMessage=java.util.stream.StreamSupport.stream(requests.get(1).path("messages").spliterator(),false)
                 .filter(m->m.path("role").asText().equals("tool")).findFirst().orElseThrow();
@@ -672,12 +712,13 @@ class DeepSeekModelClientTest {
         var transcript = new java.util.ArrayList<String>();
         for (var message : messages) transcript.add(message.path("content").asText());
         int first = transcript.indexOf("use 90 percent");
-        int answer = transcript.indexOf("first answer");
+        int answer = transcript.indexOf("[历史回答 turn-1-answer；样例数值仅适用当时输入]\nfirst answer");
         int latest = transcript.indexOf("change to 80 percent");
         assertTrue(first < answer && answer < latest);
         assertEquals(messages.size() - 1, latest);
         assertEquals("assistant", messages.get(first + 1).path("role").asText());
         assertEquals("tool", messages.get(first + 2).path("role").asText());
+        assertEquals("first answer",turns.getFirst().getAnswer());
     }
 
     @Test

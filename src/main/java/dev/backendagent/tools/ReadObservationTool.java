@@ -15,11 +15,12 @@ public final class ReadObservationTool implements Tool {
     public ReadObservationTool(AgentSession session, WorkspaceAccess workspace,
                                dev.backendagent.history.ObservationArchive source) {
         this.session = java.util.Objects.requireNonNull(session);
+        if(workspace!=null)session.bindVerificationWorkspace(workspace);
         this.archive = new dev.backendagent.history.HistoryArchiveReader(source, workspace);
     }
     public String name() { return "read_observation"; }
     public ToolDefinition definition() {
-        return new ToolDefinition(name(), "按调用 ID 取回本会话历史工具结果，最多 200 行。行号属于工具结果原文，不是源文件。旧结果不证明当前文件或测试状态。",
+        return new ToolDefinition(name(), "按调用 ID 取回本会话历史工具结果，最多 200 行。行号属于工具结果原文，不是源文件。文件片段经当前哈希核验未过期可复用；过期需重新读取，无指纹来源只供历史追溯。",
                 Map.of("call_id", "历史工具调用 ID", "start_line", "结果起始行，从 1 开始",
                         "end_line", "结果结束行，包含该行"));
     }
@@ -43,7 +44,7 @@ public final class ReadObservationTool implements Tool {
                         || validity == dev.backendagent.runtime.ObservationEvidence.Validity.STALE)
                     + " fileEvidenceValidity=" + validity
                     + " eventSequence=" + source.getSequence()
-                    + " totalLines=" + lines.length + "\n历史结果，不能证明当前工作区状态。\n");
+                    + " totalLines=" + lines.length + "\n文件片段经当前哈希核验为CURRENT时可直接复用；STALE需重新读取，UNKNOWN仅供追溯。\n");
             if (exchange.evidence() != null) {
                 var evidence = exchange.evidence();
                 output.append("sourcePath=").append(evidence.getFile().getPath())

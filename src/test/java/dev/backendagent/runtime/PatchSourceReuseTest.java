@@ -9,6 +9,18 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
 class PatchSourceReuseTest {
     @TempDir Path root;
+    @Test void numberedDefaultRetainsLiteralLinePrefixesAsPatchSource() throws Exception {
+        Files.writeString(root.resolve("note.txt"),"1: literal source text\r\n");
+        var workspace=new Workspace(root,root.resolve("agent-local.properties"));
+        var result=new ReadFileTool(workspace).execute(Map.of("path","note.txt","start_line","1","end_line","1"));
+        var json=new com.fasterxml.jackson.databind.ObjectMapper();
+        var restored=json.readValue(json.writeValueAsString(result),ToolResult.class);
+        var session=new AgentSession("edit");
+        session.remember(new ToolExchange(new ToolCall("r","read_file",Map.of("path","note.txt")),restored));
+        assertTrue(session.hasCurrentPatchSource("note.txt","1: literal source text",workspace));
+        Files.writeString(root.resolve("note.txt"),"changed\r\n");
+        assertFalse(session.hasCurrentPatchSource("note.txt","1: literal source text",workspace));
+    }
     @Test void createAndPatchCanShareOneToolBatch() throws Exception {
         var w=new Workspace(root,root.resolve("agent-local.properties"));var s=new AgentSession("create and edit");var count=new AtomicInteger();
         new AgentRuntime(req->count.getAndIncrement()==0?ModelResponse.callTools(List.of(
@@ -57,7 +69,7 @@ class PatchSourceReuseTest {
             store.bindWorkspace(w);var s=new AgentSession("first edit",store);store.create(s);id=s.id();
             var step=new AtomicInteger();
             new AgentRuntime(q->switch(step.getAndIncrement()){
-                case 0->ModelResponse.callTool(new ToolCall("r","read_file",Map.of("path","Main.java","start_line","1","end_line","10","format","raw")));
+                case 0->ModelResponse.callTool(new ToolCall("r","read_file",Map.of("path","Main.java","start_line","1","end_line","10")));
                 case 1->ModelResponse.callTool(new ToolCall("p","apply_patch",Map.of("path","Main.java","old_text","n = 1","new_text","n = 2")));
                 default->ModelResponse.finish("first done");
             },List.of(new ReadFileTool(w),new ApplyPatchTool(w,s)),3).run(s);

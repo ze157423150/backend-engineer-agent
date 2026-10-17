@@ -13,7 +13,7 @@ public interface WorkspaceAccess {
     ToolResult readFile(String path, String start, String end);
     default ToolResult readFile(String path, String start, String end, String format) {
         if (format == null || format.equals("numbered")) return readFile(path, start, end);
-        return new ToolResult(false, "此工作区实现不支持 raw 读取");
+        return new ToolResult(false, "默认文件读取仅支持带行号格式");
     }
     dev.backendagent.model.FileFingerprint fileFingerprint(String path) throws IOException;
     ToolResult searchCode(String path, String query);

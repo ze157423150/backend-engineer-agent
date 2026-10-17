@@ -11,13 +11,25 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 final class HistoricalEvidenceNotice {
     private HistoricalEvidenceNotice() { }
 
+    static String scope(HistoricalEvidence evidence) {
+        return evidence.getCurrentValidity()==dev.backendagent.runtime.ObservationEvidence.Validity.CURRENT
+                && evidence.getSourceTool().equals("read_file")?"CURRENT_FILE":"HISTORICAL_ONLY";
+    }
+    static ArrayNode entries(ObjectMapper json,List<HistoricalEvidence> evidence) {
+        var entries=json.createArrayNode();
+        for(var e:evidence) {
+            ObjectNode item=json.valueToTree(e);
+            item.put("currentValidity",e.getCurrentValidity().name());item.put("usageScope",scope(e));entries.add(item);
+        }
+        return entries;
+    }
     static ArrayNode currentRetrievals(ObjectMapper json, List<HistoricalEvidence> evidence) {
         var states = json.createArrayNode();
         for (var excerpt : evidence) {
             states.addObject().put("sourceCallId", excerpt.getSourceCallId())
                     .put("retrievalState", "IN_HISTORICAL_EVIDENCE_AREA")
                     .put("startLine", excerpt.getStartLine()).put("endLine", excerpt.getEndLine())
-                    .put("truncated", excerpt.isTruncated()).put("usageScope", "HISTORICAL_ONLY");
+                    .put("truncated", excerpt.isTruncated()).put("currentValidity",excerpt.getCurrentValidity().name()).put("usageScope",scope(excerpt));
         }
         return states;
     }
@@ -27,7 +39,7 @@ final class HistoricalEvidenceNotice {
         reference.set("currentHistoricalRetrievals", currentRetrievals(json, evidence));
         reference.put("retrievalNotice", "以下来源的原文片段已在本次历史证据区，按sourceCallId及实际行范围查阅。"
                 + "摘要、旧索引引句中的省略/待提取描述是当时状态，不代表本次片段不可见；"
-                + "未列出的来源或范围仍需提取。旧引句保持原样，仅供历史追溯，不能证明当前文件或测试状态。");
+                + "未列出的来源或范围仍需提取。同一来源同一范围与中期旧描述冲突时，以本区CURRENT_FILE片段为准，不覆盖用户要求或新版本文件；按currentValidity区分：CURRENT_FILE片段可复用，STALE需重新读取，UNKNOWN仅供追溯；历史测试不表示本轮重新执行。");
     }
 
     static String historicalAnswer(String answer, List<HistoricalEvidence> evidence) {
@@ -62,7 +74,7 @@ final class HistoricalEvidenceNotice {
                     });
         }
         index.put("notice", "仅为历史索引，validity是原证据状态；currentHistoricalRetrieval标明本次证据区实际保留的片段。"
-                + "该片段可直接用于历史追溯，不要重复提取；未保留的来源或范围仍需read_observation，不能证明当前状态。");
+                + "已保留片段无需重复提取；CURRENT_FILE可直接复用，STALE须重新读取当前文件，UNKNOWN只供追溯；其他范围按需read_observation。");
         return json.writeValueAsString(index);
     }
 
@@ -82,7 +94,8 @@ final class HistoricalEvidenceNotice {
                 + "缓存范围为原工具结果第 " + excerpt.getStartLine() + ".." + excerpt.getEndLine()
                 + " 行，truncated=" + excerpt.isTruncated()
                 + "；仅此范围可见，不代表整份原文已取回，其他范围仍需 read_observation。"
-                + "usageScope=HISTORICAL_ONLY，仅供追溯，不能证明当前状态；当前代码或测试需重新读取或运行。";
+                + "currentValidity=" + excerpt.getCurrentValidity() + ", usageScope=" + scope(excerpt)
+                + "；CURRENT_FILE可复用已提取范围，STALE需重新读取，UNKNOWN仅供追溯。";
         if (stalePlaceholder) { return notice; }
         String marker = "[ARCHIVED_BODY call_id=" + exchange.call().id() + ";";
         int from = content.indexOf(marker);

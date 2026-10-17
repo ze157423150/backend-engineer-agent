@@ -29,7 +29,7 @@ class ObservationEvidenceTest {
         var workspace = workspace();
         var result = workspace.readFile("./Main.java", "1", "1");
         assertTrue(result.successful());
-        assertTrue(result.content().contains("1: 第一行😀"));
+        assertEquals("file=Main.java, totalLines=3\n1: 第一行😀\n",result.content());
         assertFalse(result.content().contains("second"));
         var expected = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
         assertEquals(expected, result.fileFingerprint().getSha256());

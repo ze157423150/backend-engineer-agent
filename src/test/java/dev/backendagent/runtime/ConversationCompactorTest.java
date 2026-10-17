@@ -53,7 +53,7 @@ class ConversationCompactorTest {
         assertTrue(request.toIndex()>2);
         assertNull(session.conversationSummary());
     }
-    @Test void conversationSummaryInstallationShrinksToolHistoryWithoutMutatingCandidateState() {
+    @Test void conversationSummaryIsValidatedBeforeFinalToolHistoryTrimming() {
         var session=sixTurns(1000);
         for(int i=0;i<3;i++) session.remember(new ToolExchange(new ToolCall("read-"+i,"read_file",Map.of("path","Main.java")),
                 new ToolResult(true,"x".repeat(3000)),null,20+i));
@@ -65,9 +65,9 @@ class ConversationCompactorTest {
                 return List.of(new SummaryNote(SummaryNote.Kind.PROGRESS,"第1轮要求满100九折","turn-1-user","满100九折"));
             }
             public RequestBudgetReport inspectRequest(ModelRequest request) {
-                if(request.conversationSummary()!=null && session.conversationSummary()==null && request.history().size()<3)
+                if(request.conversationSummary()!=null && session.conversationSummary()==null && request.history().size()==3)
                     shrunkCandidate.set(true);
-                return new RequestBudgetReport(1000+request.historyCharacters(),500,500,9000);
+                return new RequestBudgetReport(1000+request.historyCharacters()+request.turns().stream().mapToInt(t->t.getUserMessage().length()+(t.getAnswer()==null?0:t.getAnswer().length())).sum(),500,500,9000);
             }
             public ModelResponse execute(ModelRequest request) {
                 assertNotNull(request.conversationSummary());

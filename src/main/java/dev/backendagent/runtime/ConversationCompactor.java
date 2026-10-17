@@ -32,12 +32,13 @@ public final class ConversationCompactor {
         }
         return List.copyOf(selected);
     }
-    public ConversationSummaryRequest plan(AgentSession session) {
+    public ConversationSummaryRequest plan(AgentSession session) { return plan(session,false); }
+    public ConversationSummaryRequest plan(AgentSession session,boolean pressure) {
         var turns=session.turns();
         int recent=Math.max(0,turns.size()-1-RECENT_TURNS),oldest=Math.max(0,recent-MIDDLE_TURNS);
         int covered=session.conversationSummary()==null?0:session.conversationSummary().getCoveredTurns();
         int attempt=Math.max(covered,session.lastConversationSummaryAttemptEnd());
-        if (recent-attempt<INTERVAL) return null;
+        if (recent-attempt<(pressure?1:INTERVAL)) return null;
         int from=Math.max(covered,oldest);
         var input=new ArrayList<ConversationMessage>();
         int to=from;

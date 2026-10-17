@@ -24,7 +24,7 @@ class PendingSummaryRetentionTest {
         assertEquals(12, request.history().size());
         assertEquals("r4", request.history().getFirst().call().id());
         assertEquals("r15", request.history().getLast().call().id());
-        assertEquals(6, request.contextProjection().getPolicyVersion());
+        assertEquals(7, request.contextProjection().getPolicyVersion());
         assertTrue(request.contextProjection().getRecoveryReferences().contains("UNSUMMARIZED_OMITTED count=4"));
         assertTrue(request.contextProjection().getRecoveryReferences().contains("call_id=r0,"));
         request.contextProjection().validateAgainst(session.history());
@@ -66,7 +66,7 @@ class PendingSummaryRetentionTest {
                 new ToolResult(true, "b".repeat(100)), null, 2));
         var request = new ContextAssembler(new ContextBudget(1000)).assemble(session, List.of(), 10);
         assertEquals(List.of("a", "b"), request.history().stream().map(x -> x.call().id()).toList());
-        assertTrue(request.contextProjection().getRecoveryReferences().contains("summaryState=NOT_SUMMARIZED, call_id=write"));
+        assertFalse(request.contextProjection().getRecoveryReferences().contains("call_id=write")); // Both batches are recent and excluded from the index.
         assertTrue(request.historyCharacters() <= 1000);
         request.contextProjection().validateAgainst(session.history());
     }
@@ -82,7 +82,7 @@ class PendingSummaryRetentionTest {
         var projection = new ContextAssembler().assemble(session, List.of(), 10).contextProjection();
         var json = new ObjectMapper();
         var restored = json.readValue(json.writeValueAsString(projection), ContextProjection.class);
-        assertEquals(6, restored.getPolicyVersion());
+        assertEquals(7, restored.getPolicyVersion());
         assertEquals(8, restored.getSummaryCoveredExchanges());
         restored.validateAgainst(session.history());
         var oldJson = (com.fasterxml.jackson.databind.node.ObjectNode) json.valueToTree(legacy);

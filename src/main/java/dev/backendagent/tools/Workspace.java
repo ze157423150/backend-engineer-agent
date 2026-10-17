@@ -189,7 +189,7 @@ public final class Workspace implements WorkspaceAccess {
                 String raw = text.substring(offsets.get(startLine - 1), last < offsets.size() ? offsets.get(last) : text.length());
                 if (raw.length() > MAX_OUTPUT_CHARS) return failure("raw范围超过输出限制，请缩小行范围；未返回不完整源码");
                 return new ToolResult(true, raw, fingerprint(file, bytes), null,
-                        new dev.backendagent.model.FileReadMetadata(offsets.size(),startLine,last,last==offsets.size(),true,false));
+                        new dev.backendagent.model.FileReadMetadata(offsets.size(),startLine,last,last==offsets.size(),true,false,"raw"));
             }
             try (var reader = new java.io.BufferedReader(new java.io.StringReader(text))) {
                 lines = reader.lines().toList();
@@ -210,7 +210,7 @@ public final class Workspace implements WorkspaceAccess {
             }
             return new ToolResult(true, output.toString(), fingerprint(file, bytes), null,
                     lastRead==0?null:new dev.backendagent.model.FileReadMetadata(lines.size(),startLine,lastRead,
-                            lastRead==lines.size(),lastRead==Math.min(endLine,lines.size()),false));
+                            lastRead==lines.size(),lastRead==Math.min(endLine,lines.size()),false,"numbered"));
         } catch (IOException | IllegalArgumentException failure) {
             return failure("文件不可读取，请检查工作区相对路径和行号；密钥文件、隐藏路径和符号链接禁止读取");
         }

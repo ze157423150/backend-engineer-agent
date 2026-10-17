@@ -55,7 +55,7 @@ class PendingSummaryCheckpointTest {
         }
         try (var store = new FileSessionStore(data)) {
             var restored = store.openCompleted(id, workspace, 40);
-            assertEquals(6, restored.contextProjection().getPolicyVersion());
+            assertEquals(7, restored.contextProjection().getPolicyVersion());
             assertEquals(coverage, restored.contextProjection().getSummaryCoveredExchanges());
             restored.contextProjection().validateAgainst(restored.history());
         }

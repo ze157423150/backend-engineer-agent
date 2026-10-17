@@ -12,7 +12,7 @@ public final class VerificationSources {
         var sources = new LinkedHashMap<String,VerificationSource>();
         for (var turn : request.turns()) {
             add(sources,"turn-"+turn.getTurnId()+"-user","USER",turn.getTurnId(),turn.getUserMessage(),null,"CURRENT");
-            if(turn.getAnswer()!=null) add(sources,"turn-"+turn.getTurnId()+"-answer","ASSISTANT",turn.getTurnId(),turn.getAnswer(),null,"REFERENCE");
+            if(turn.getAnswer()!=null&&(request.conversationSummary()==null||turn.getTurnId()>request.conversationSummary().getCoveredTurns())) add(sources,"turn-"+turn.getTurnId()+"-answer","ASSISTANT",turn.getTurnId(),turn.getAnswer(),null,"REFERENCE");
         }
         if(request.turns().isEmpty()) add(sources,"turn-1-user","USER",1,request.objective(),null,"CURRENT");
         if(request.conversationSummary()!=null) for(var n:request.conversationSummary().getNotes()) {
@@ -131,7 +131,15 @@ public final class VerificationSources {
                 entry=b.withCurrency(currency);
             }
             if((entry.status().equals("SUPERSEDED")||entry.status().equals("STALE"))&&!externallyVisible(entry,visible))continue;
-            result.add(entry);
+            // Same-version observations can have different call IDs or display line numbers.
+            String excerpt=entry.quote().replaceAll("(?m)^\\d+: ?", "").strip();
+            var file=entry.source().file();
+            var candidate=entry;
+            boolean duplicate=file!=null&&result.stream().anyMatch(old->Objects.equals(old.source().file(),file)
+                    &&old.status().equals(candidate.status())&&Objects.equals(old.replacement(),candidate.replacement())
+                    &&Objects.equals(old.replacementQuote(),candidate.replacementQuote())
+                    &&old.quote().replaceAll("(?m)^\\d+: ?", "").strip().equals(excerpt));
+            if(!duplicate)result.add(entry);
         }
         return List.copyOf(result);
     }

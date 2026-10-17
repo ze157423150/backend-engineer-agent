@@ -51,7 +51,7 @@ class ContextWindowTest {
             assertEquals(List.of("r0", "r5"), view.contextSummary().getNotes().stream().map(SummaryNote::getSourceCallId).toList());
             assertFalse(view.contextProjection().getRecoveryReferences().contains("call_id=r0,"));
             assertTrue(view.contextProjection().getRecoveryReferences().contains("call_id=r4,"));
-            assertEquals(6, view.contextProjection().getPolicyVersion());
+            assertEquals(7, view.contextProjection().getPolicyVersion());
             view.contextProjection().validateAgainst(session.history());
             assertEquals(3, session.contextSummary().getNotes().size()); // Valid older facts remain in the rolling checkpoint.
             assertTrue(session.originalObservation("r0").result().content().contains("evidence-r0"));
@@ -160,7 +160,7 @@ class ContextWindowTest {
                 var diskView = assembler.assemble(durable, List.of(), 10);
                 var memoryView = assembler.assemble(memory, List.of(), 10);
                 assertEquals(json.writeValueAsString(diskView), json.writeValueAsString(memoryView));
-                assertEquals(6, memoryView.contextProjection().getPolicyVersion());
+                assertEquals(7, memoryView.contextProjection().getPolicyVersion());
             }
             var summary = new ContextSummary(1, 15, List.of(note("a0"), note("a5"), note("a14")));
             durable.installSummary(summary);

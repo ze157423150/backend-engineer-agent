@@ -28,9 +28,10 @@ class WorkspaceTest {
 
         var result = workspace.readFile("Service.java", "2", "2");
         assertTrue(result.successful());
-        assertTrue(result.content().contains("file=Service.java, totalLines=3"));
-        assertTrue(result.content().contains("2:     void cancel() {}"));
-        assertFalse(result.content().contains("1: class"));
+        assertEquals("file=Service.java, totalLines=3\n2:     void cancel() {}\n",result.content());
+        assertEquals(3,result.readMetadata().getTotalLines());
+        assertEquals(2,result.readMetadata().getStartLine());
+        assertEquals("numbered",result.readMetadata().getFormat());
     }
 
     @Test
@@ -128,7 +129,7 @@ class WorkspaceTest {
                 return ModelResponse.callTool(new ToolCall("read-1", "read_file", Map.of(
                         "path", discoveredPath, "start_line", "1", "end_line", "20")));
             }
-            return ModelResponse.finish(observed.content());
+            return ModelResponse.finish(observed.fileFingerprint().getPath()+"\n"+observed.content());
         };
         var session = new AgentSession("find the code and explain cancellation");
         new AgentRuntime(model, List.of(new ListFilesTool(workspace), new ReadFileTool(workspace),

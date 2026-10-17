@@ -7,6 +7,10 @@ public interface ModelClient {
     default java.util.List<dev.backendagent.verification.ActiveVerificationBasis> updateVerificationBasis(VerificationUpdateRequest request) {
         throw new UnsupportedOperationException("Automatic verification basis updates are not supported");
     }
+    default boolean supportsVerificationCompaction() { return false; }
+    default java.util.List<dev.backendagent.verification.ActiveVerificationBasis> compactVerificationBasis(VerificationCompactionRequest request) {
+        throw new UnsupportedOperationException("Verification basis compaction is not supported");
+    }
     default RequestBudgetReport inspectRequest(ModelRequest request) { return null; }
     default boolean supportsConversationSummarization() { return false; }
     default java.util.List<dev.backendagent.runtime.SummaryNote> summarizeConversation(ConversationSummaryRequest request) {

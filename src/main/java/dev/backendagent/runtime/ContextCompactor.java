@@ -23,14 +23,15 @@ public final class ContextCompactor {
 
     private SummaryPlan waiting() { return new SummaryPlan(SummaryPlan.Reason.WAITING, null, 0, 0, minimumInputCharacters); }
 
-    public SummaryPlan decide(AgentSession session) {
+    public SummaryPlan decide(AgentSession session) { return decide(session,false); }
+    public SummaryPlan decide(AgentSession session,boolean pressure) {
         var raw = session.history();
         int recent = ContextWindowPolicy.suffixStart(raw, ContextWindowPolicy.RECENT_BATCHES);
         int oldest = ContextWindowPolicy.suffixStart(raw, ContextWindowPolicy.RECENT_BATCHES + ContextWindowPolicy.SUMMARY_BATCHES);
         int covered = session.contextSummary() == null ? 0 : session.contextSummary().getCoveredExchanges();
         int attempt = Math.max(covered, session.lastWindowSummaryAttemptEnd());
         if (attempt >= recent || ContextWindowPolicy.countBatches(raw, Math.max(oldest, attempt), recent)
-                < ContextWindowPolicy.SUMMARY_INTERVAL_BATCHES) { return waiting(); }
+                < (pressure?1:ContextWindowPolicy.SUMMARY_INTERVAL_BATCHES)) { return waiting(); }
         int outputLimit = Math.min(4000, budget.getMaxHistoryCharacters() / 4);
         if (outputLimit < 512) { return waiting(); }
         var stale = StaleObservationFilter.staleIds(raw);

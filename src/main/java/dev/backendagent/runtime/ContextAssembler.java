@@ -8,13 +8,21 @@ import dev.backendagent.tools.ToolDefinition;
 /** Selects a suffix of complete model turns without changing the session's full history. */
 public final class ContextAssembler {
     private final ContextBudget budget;
+    private final boolean pressurePreview;
 
     public ContextAssembler() {
         this(new ContextBudget(ContextBudget.DEFAULT_MAX_HISTORY_CHARACTERS));
     }
 
     public ContextAssembler(ContextBudget budget) {
-        this.budget = java.util.Objects.requireNonNull(budget);
+        this(budget,false);
+    }
+    private ContextAssembler(ContextBudget budget,boolean pressurePreview) {
+        this.budget=java.util.Objects.requireNonNull(budget);this.pressurePreview=pressurePreview;
+    }
+    public ModelRequest previewUntrimmed(AgentSession session,List<ToolDefinition> tools,int remainingCalls,
+                                         ContextSummary summary,ConversationSummary dialogueSummary) {
+        return new ContextAssembler(budget,true).preview(session,tools,remainingCalls,summary,dialogueSummary);
     }
 
     public ModelRequest assemble(AgentSession session, List<ToolDefinition> tools, int remainingCalls) {
@@ -34,14 +42,25 @@ public final class ContextAssembler {
         var visibleSummary = ContextWindowPolicy.visibleSummary(summary, session.history(), stale);
         var visibleDialogue=ConversationCompactor.visibleSummary(dialogueSummary,session.turns());
         var verification = session.verificationContext();
-        int summaryCost = (visibleSummary == null ? 0 : visibleSummary.characterCount()) + session.historicalEvidenceCharacters()+(visibleDialogue==null?0:visibleDialogue.characterCount())
+        int fixedCost = (visibleSummary == null ? 0 : visibleSummary.characterCount())+(visibleDialogue==null?0:visibleDialogue.characterCount())
                 + (verification == null ? 0 : verification.characterCount());
-        if (summaryCost >= budget.getMaxHistoryCharacters()) {
-            throw new IllegalStateException("Summary exceeds history budget; increase --max-history-chars");
+        var allEvidence=session.historicalEvidenceForContext();
+        var hiddenEvidence=allEvidence;
+        int summaryCost=fixedCost;
+        ContextProjection projection=null;
+        // Start without duplicate cache cost, then include only excerpts whose original stays hidden.
+        // Smaller allowances cannot expose additional originals, so at most one change per cache entry.
+        for(int pass=0;pass<=allEvidence.size()+1;pass++) {
+            if(summaryCost>=budget.getMaxHistoryCharacters())
+                throw new IllegalStateException("Summary exceeds history budget; increase --max-history-chars");
+            projection=new ContextAssembler(new ContextBudget(budget.getMaxHistoryCharacters()-summaryCost),pressurePreview)
+                    .project(session.history(),7,summary==null?0:summary.getCoveredExchanges());
+            hiddenEvidence=dev.backendagent.history.HistoricalEvidenceArea.hiddenOnly(allEvidence,projection.getHistory());
+            int nextCost=fixedCost+hiddenEvidence.stream().mapToInt(dev.backendagent.history.HistoricalEvidence::characterCount).sum();
+            if(nextCost==summaryCost)break;
+            if(pass==allEvidence.size()+1)throw new IllegalStateException("Historical evidence visibility did not stabilize");
+            summaryCost=nextCost;
         }
-        int version = 6;
-        var projection = new ContextAssembler(new ContextBudget(budget.getMaxHistoryCharacters() - summaryCost))
-                .project(session.history(), version, summary == null ? 0 : summary.getCoveredExchanges());
         // A retained original does not need its summary note repeated in the same request.
         if (visibleSummary != null) {
             var retainedIds = projection.getHistory().stream().map(exchange -> exchange.call().id())
@@ -56,7 +75,7 @@ public final class ContextAssembler {
                 session.memoryFacts().stream().filter(fact -> !stale.contains(fact.getSourceCallId())).toList(), projection,
                 visibleSummary, summary == null ? java.util.Set.of() : summary.getNotes().stream()
                     .map(SummaryNote::getSourceCallId).filter(stale::contains)
-                    .collect(java.util.stream.Collectors.toSet()), session.workspaceState(), session.historicalEvidence(), ConversationCompactor.visibleTurns(session.turns(),dialogueSummary,
+                    .collect(java.util.stream.Collectors.toSet()), session.workspaceState(), hiddenEvidence, ConversationCompactor.visibleTurns(session.turns(),dialogueSummary,
                         projection.getOmittedExchanges(),session.history().size()).stream().map(turn ->
                     new ConversationTurn(turn.getTurnId(), turn.getUserMessage(),
                             turn.getStatus() == AgentSession.Status.COMPLETED ? AgentSession.Status.COMPLETED : AgentSession.Status.RUNNING,
@@ -82,7 +101,7 @@ public final class ContextAssembler {
         boolean filterStale = policyVersion >= 2;
         var baseline = filterStale ? StaleObservationFilter.filter(raw) : raw;
         var history = new java.util.ArrayList<>(baseline);
-        if (policyVersion >= 6 && baseline.stream().mapToLong(budget::measure).sum() > budget.getMaxHistoryCharacters()) {
+        if (!pressurePreview && policyVersion >= 6 && baseline.stream().mapToLong(budget::measure).sum() > budget.getMaxHistoryCharacters()) {
             var pruner = new ToolResultCompressor();
             for (int i = 0; i < history.size(); i++) { history.set(i, pruner.prune(history.get(i))); }
         }
@@ -128,7 +147,7 @@ public final class ContextAssembler {
             for (int index = batchStart; index < batchEnd; index++) {
                 batchCharacters += budget.measure(history.get(index));
             }
-            if (selectedCharacters + batchCharacters > budget.getMaxHistoryCharacters()) {
+            if (!pressurePreview && selectedCharacters + batchCharacters > budget.getMaxHistoryCharacters()) {
                 if (selectedStart == history.size()) {
                     throw new IllegalStateException("Latest tool batch exceeds history character budget; "
                             + "increase --max-history-chars or request smaller tool results");
@@ -140,6 +159,10 @@ public final class ContextAssembler {
         }
         // A bounded catalogue makes omitted call IDs discoverable without orphan tool messages.
         var references = new StringBuilder();
+        if(policyVersion>=7) {
+            appendMiddleIndex(raw,summaryCoveredExchanges,Math.min(selectedStart,
+                    ContextWindowPolicy.suffixStart(raw,ContextWindowPolicy.RECENT_BATCHES)),references,selectedCharacters);
+        } else {
         int referenceStart = policyVersion >= 3 ? ContextWindowPolicy.suffixStart(raw,
                 ContextWindowPolicy.RECENT_BATCHES + ContextWindowPolicy.SUMMARY_BATCHES) : Math.max(0, selectedStart - 20);
         if (policyVersion == 3 || (policyVersion >= 4 && selectedStart > 0)) {
@@ -173,15 +196,40 @@ public final class ContextAssembler {
             }
             references.append(line);
         }
+        }
         int compressed = 0;
         int filtered = 0;
         for (int i = selectedStart; i < history.size(); i++) {
             if (!history.get(i).equals(baseline.get(i))) { compressed++; }
             if (!baseline.get(i).equals(raw.get(i))) { filtered++; }
         }
-        return new ContextProjection(policyVersion, raw.size(), budget.getMaxHistoryCharacters(), selectedStart,
+        // Pressure previews are never installed/persisted; allow their uncropped measurement to exceed the configured limit.
+        return new ContextProjection(policyVersion, raw.size(), pressurePreview?Integer.MAX_VALUE:budget.getMaxHistoryCharacters(), selectedStart,
                 selectedCharacters + references.length(), compressed, references.toString(),
                 history.subList(selectedStart, history.size()), filtered, summaryCoveredExchanges);
+    }
+
+    /** Index only hidden records older than the recent four batches, once per call ID. */
+    private void appendMiddleIndex(List<dev.backendagent.model.ToolExchange> raw,int covered,int end,
+            StringBuilder out,long selectedCharacters) {
+        if(end<=0)return;
+        appendReference(out,selectedCharacters,"索引不含近期4批；默认当时成功，时效未重核；失败/过期另标。已取回的同来源范围以当前历史证据区为准。\n");
+        var stale=StaleObservationFilter.staleIds(raw);
+        long pending=raw.subList(Math.min(covered,end),end).stream()
+                .filter(e->!stale.contains(e.call().id())).count();
+        if(pending>0)appendReference(out,selectedCharacters,"UNSUMMARIZED_OMITTED count="+pending+"\n");
+        var candidates=new java.util.LinkedHashSet<Integer>();
+        for(boolean writes:new boolean[]{true,false})
+            for(int i=end-1;i>=covered;i--)
+                if(WorkspaceState.isSuccessfulWrite(raw.get(i))==writes)candidates.add(i);
+        int oldest=ContextWindowPolicy.suffixStart(raw,ContextWindowPolicy.RECENT_BATCHES+ContextWindowPolicy.SUMMARY_BATCHES);
+        for(int i=end-1;i>=oldest;i--)candidates.add(i);
+        for(int i:candidates) {
+            var entry=raw.get(i);var call=entry.call();String path=call.arguments().get("path");
+            appendReference(out,selectedCharacters,"call_id="+call.id()+", tool="+call.name()
+                    +(path==null?"":", path=\""+cataloguePath(path)+"\"")
+                    +(entry.result().successful()?"":", failed")+(stale.contains(call.id())?", STALE":"")+"\n");
+        }
     }
 
     private void appendUnsummarizedReferences(List<dev.backendagent.model.ToolExchange> raw, int covered,

@@ -28,7 +28,7 @@ class WorkspaceCreateFileTest {
         Files.createDirectory(root.resolve("src"));
         assertTrue(workspace.createFile("src/Added.java", "class Added {}\n").successful());
         assertEquals("class Added {}\n", Files.readString(root.resolve("src/Added.java")));
-        assertTrue(workspace.readFile("src/Added.java", "1", "10").content().contains("1: class Added {}"));
+        assertTrue(workspace.readFile("src/Added.java", "1", "10").content().contains("class Added {}"));
         assertTrue(workspace.searchCode(".", "Added").content().contains("src/Added.java:1:"));
         String diff = workspace.diff("src/Added.java").content();
         assertTrue(diff.contains("--- /dev/null"));
