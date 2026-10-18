@@ -1,0 +1,68 @@
+package telemetry;
+import org.junit.jupiter.api.Test;import static org.junit.jupiter.api.Assertions.*;
+class PrivateContractTest {
+private static LogEntry e(int status,long latency){return new LogEntry(1,"api",status,latency);}
+private static java.util.List<LogEntry> es(int... statuses){var r=new java.util.ArrayList<LogEntry>();for(int s:statuses)r.add(e(s,10));return r;}
+private static java.util.List<LogEntry> lat(long... values){var r=new java.util.ArrayList<LogEntry>();for(long v:values)r.add(e(200,v));return r;}
+private static String l(int status,long latency){return "1|api|"+status+"|"+latency;}
+ @Test void contract1() {var x=LogParser.parse(" 100 | API-GW | 200 | 15 ");assertEquals(100L,x.timestampMillis);assertEquals("api-gw",x.service);assertEquals(200,x.status);assertEquals(15L,x.latencyMillis);}
+ @Test void contract2() {assertEquals(Long.MAX_VALUE,LogParser.parse("9223372036854775807|api|599|3600000").timestampMillis);}
+ @Test void contract3() {assertEquals(0L,LogParser.parse("000|a|100|0").latencyMillis);}
+ @Test void contract4() {assertEquals("a".repeat(32),LogParser.parse("1|"+"a".repeat(32)+"|200|1").service);}
+ @Test void contract5() {assertEquals("api",LogParser.parse("1|API|200|1").service);}
+ @Test void contract6() {assertThrows(IllegalArgumentException.class,()->LogParser.parse(null));}
+ @Test void contract7() {assertThrows(IllegalArgumentException.class,()->LogParser.parse(""));}
+ @Test void contract8() {assertThrows(IllegalArgumentException.class,()->LogParser.parse(" "));}
+ @Test void contract9() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1|api|200|"));}
+ @Test void contract10() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1|api|200"));}
+ @Test void contract11() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1|api|200|1|extra"));}
+ @Test void contract12() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1||200|1"));}
+ @Test void contract13() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1|_api|200|1"));}
+ @Test void contract14() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|200|1"));}
+ @Test void contract15() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("-1|api|200|1"));}
+ @Test void contract16() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("+1|api|200|1"));}
+ @Test void contract17() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("9223372036854775808|api|200|1"));}
+ @Test void contract18() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1|api|99|1"));}
+ @Test void contract19() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1|api|600|1"));}
+ @Test void contract20() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1|api|200|-1"));}
+ @Test void contract21() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1|api|200|3600001"));}
+ @Test void contract22() {assertThrows(IllegalArgumentException.class,()->LogParser.parse("1|api|200|1.5"));}
+ @Test void contract23() {assertArrayEquals(new long[]{0,0,0,0,0},StatusMetrics.summarize(java.util.List.of()));}
+ @Test void contract24() {assertArrayEquals(new long[]{9,2,2,2,90},StatusMetrics.summarize(es(199,200,299,300,399,400,499,500,599)));}
+ @Test void contract25() {assertArrayEquals(new long[]{1,0,1,0,10},StatusMetrics.summarize(es(429)));}
+ @Test void contract26() {var v=new java.util.ArrayList<LogEntry>();for(int i=0;i<1000;i++)v.add(e(200,3600000));assertEquals(3600000000L,StatusMetrics.summarize(v)[4]);}
+ @Test void contract27() {assertThrows(IllegalArgumentException.class,()->StatusMetrics.summarize(null));}
+ @Test void contract28() {assertThrows(IllegalArgumentException.class,()->StatusMetrics.summarize(java.util.Arrays.asList(e(200,1),null)));}
+ @Test void contract29() {assertEquals(2L,LatencyStats.percentile(lat(4,1,3,2),50));}
+ @Test void contract30() {assertEquals(4L,LatencyStats.percentile(lat(4,1,3,2),95));}
+ @Test void contract31() {assertEquals(4L,LatencyStats.percentile(lat(4,1,3,2),100));}
+ @Test void contract32() {assertEquals(1L,LatencyStats.percentile(lat(4,1,3,2),1));}
+ @Test void contract33() {var v=new java.util.ArrayList<LogEntry>();for(int i=20;i>=1;i--)v.add(e(200,i));assertEquals(19L,LatencyStats.percentile(v,95));assertEquals(20L,v.get(0).latencyMillis);}
+ @Test void contract34() {var v=new java.util.ArrayList<LogEntry>();for(int i=1;i<=21;i++)v.add(e(500,i));assertEquals(20L,LatencyStats.percentile(v,95));}
+ @Test void contract35() {assertEquals(9L,LatencyStats.percentile(lat(9),1));assertEquals(9L,LatencyStats.percentile(lat(9),100));}
+ @Test void contract36() {assertEquals(0L,LatencyStats.percentile(java.util.List.of(),95));}
+ @Test void contract37() {assertThrows(IllegalArgumentException.class,()->LatencyStats.percentile(lat(1),0));}
+ @Test void contract38() {assertThrows(IllegalArgumentException.class,()->LatencyStats.percentile(lat(1),101));}
+ @Test void contract39() {assertThrows(IllegalArgumentException.class,()->LatencyStats.percentile(null,95));}
+ @Test void contract40() {assertThrows(IllegalArgumentException.class,()->LatencyStats.percentile(java.util.Arrays.asList(e(200,1),null),95));}
+ @Test void contract41() {assertTrue(AlertEvaluator.evaluate(es(500,200,200,200,200),5,2000));}
+ @Test void contract42() {assertFalse(AlertEvaluator.evaluate(es(500,500,500,500),5,2000));}
+ @Test void contract43() {assertFalse(AlertEvaluator.evaluate(java.util.List.of(),1,0));}
+ @Test void contract44() {assertTrue(AlertEvaluator.evaluate(es(200,200,200),3,0));}
+ @Test void contract45() {assertTrue(AlertEvaluator.evaluate(es(500,599,503),3,10000));}
+ @Test void contract46() {assertFalse(AlertEvaluator.evaluate(es(500,200,200),3,4000));}
+ @Test void contract47() {assertThrows(IllegalArgumentException.class,()->AlertEvaluator.evaluate(es(200),0,2000));}
+ @Test void contract48() {assertThrows(IllegalArgumentException.class,()->AlertEvaluator.evaluate(es(200),1,-1));}
+ @Test void contract49() {assertThrows(IllegalArgumentException.class,()->AlertEvaluator.evaluate(es(200),1,10001));}
+ @Test void contract50() {assertThrows(IllegalArgumentException.class,()->AlertEvaluator.evaluate(null,1,2000));}
+ @Test void contract51() {assertThrows(IllegalArgumentException.class,()->AlertEvaluator.evaluate(java.util.Arrays.asList(e(200,1),null),1,2000));}
+ @Test void contract52() {assertFalse(AlertEvaluator.evaluate(es(429,429,429),3,2000));}
+ @Test void contract53() {assertArrayEquals(new long[]{3,1,1,1,1,60,30,1},LogAnalyzer.analyze(java.util.List.of(l(200,10),l(404,20),l(500,30),"bad"," ")));}
+ @Test void contract54() {assertArrayEquals(new long[8],LogAnalyzer.analyze(java.util.Arrays.asList(null,""," ")));}
+ @Test void contract55() {assertArrayEquals(new long[]{0,2,0,0,0,0,0,0},LogAnalyzer.analyze(java.util.List.of("bad","1|api|200|")));}
+ @Test void contract56() {assertThrows(IllegalArgumentException.class,()->LogAnalyzer.analyze(null));}
+ @Test void contract57() {assertFalse(AlertEvaluator.evaluate(es(404,200,200),3,2000));}
+ @Test void contract58() {assertArrayEquals(new long[]{3,0,2,1,0,60,30,0},LogAnalyzer.analyze(java.util.List.of(l(404,10),l(200,20),l(200,30))));}
+ @Test void contract59() {assertFalse(AlertEvaluator.evaluate(es(429,429,200),3,2000));}
+ @Test void contract60() {assertFalse(AlertEvaluator.evaluate(es(400,200,200,200,200),5,2000));}
+}

@@ -12,6 +12,26 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Opt-in real container verification after building the local image. Never invokes a model API. */
 @EnabledIfSystemProperty(named = "docker.integration", matches = "true")
 class DockerSandboxIntegrationTest {
+    @Test void separateCommentAndAssertionPatchesReuseOriginalReadAcrossContainerCalls() throws Exception {
+        var source=Files.createDirectory(root.resolve("source"));
+        String original="// count old\nclass Example { int expected = 4; }\n";
+        Files.writeString(source.resolve("Example.java"),original);
+        var workspace=DockerWorkspace.create(new Workspace(source,source.resolve("private.properties")),
+                Files.createDirectory(root.resolve("session")),new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);
+        var session=new dev.backendagent.runtime.AgentSession("fix comment and expected value");
+        var step=new java.util.concurrent.atomic.AtomicInteger();
+        new dev.backendagent.runtime.AgentRuntime(q->switch(step.getAndIncrement()) {
+            case 0->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("read","read_file",java.util.Map.of("path","Example.java","start_line","1","end_line","10")));
+            case 1->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("comment","apply_patch",java.util.Map.of("path","Example.java","old_text","// count old","new_text","// count corrected")));
+            case 2->dev.backendagent.model.ModelResponse.callTool(new dev.backendagent.model.ToolCall("assertion","apply_patch",java.util.Map.of("path","Example.java","old_text","expected = 4","new_text","expected = 3")));
+            default->dev.backendagent.model.ModelResponse.finish("done");
+        },java.util.List.of(new dev.backendagent.tools.ReadFileTool(workspace),new dev.backendagent.tools.ApplyPatchTool(workspace,session)),4).run(session);
+        assertEquals(dev.backendagent.runtime.AgentSession.Status.COMPLETED,session.status());
+        assertTrue(session.history().stream().allMatch(e->e.result().successful()));
+        assertEquals(1,session.history().stream().filter(e->e.call().name().equals("read_file")).count());
+        assertTrue(workspace.readFile("Example.java","1","10").content().contains("expected = 3"));
+        assertEquals(original,Files.readString(source.resolve("Example.java")));
+    }
     @Test void successfulPatchFragmentsCanBeReusedInContainerWithoutRereading() throws Exception {
         var source=Files.createDirectory(root.resolve("source"));Files.writeString(source.resolve("Main.java"),"class Main { int n=1; }\n");
         var workspace=DockerWorkspace.create(new Workspace(source,source.resolve("private.properties")),

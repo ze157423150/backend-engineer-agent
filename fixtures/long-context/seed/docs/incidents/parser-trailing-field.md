@@ -1,0 +1,3 @@
+# 历史事故复盘
+PARSE-19：末尾空耗时被split丢弃，部分任务直接出现ArrayIndexOutOfBoundsException；不能捕获异常后返回正常记录。后续同批其他有效日志必须继续处理。
+历史观测是旧实现表现，应以contracts定义判定修复。

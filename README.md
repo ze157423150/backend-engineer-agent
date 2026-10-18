@@ -14,12 +14,12 @@
 | 分层上下文 | 预算充足时保留短历史；长历史采用近期完整批次、中期增量摘要、远期检索；对话摘要独立维护 |
 | 证据时效性 | 文件 SHA-256 与工作区版本识别过期读取、搜索和测试证据；旧正文默认隐藏 |
 | 历史检索与记忆 | 检索工具记录和过往对话，按需提取原文；保存带来源引句的工作记忆 |
-| 会话恢复 | 日志、checkpoint 和工作区哈希联合校验；支持预算停止、失败及部分工具批次恢复 |
+| 会话恢复 | 日志、checkpoint 和工作区哈希联合校验；支持预算停止、失败及部分工具批次恢复；评测执行器支持自动回退重试 |
 | 容器隔离 | 文件 worker 与测试容器只访问过滤后的工作副本；结果通过 /apply 显式写回或导出 |
 | 会话管理 | 列表、切换、新建与确认删除；历史、副本、摘要、调用额度及同步基准按 UUID 隔离 |
 | 模型失败处理 | 保存安全诊断，任务请求最多两次额外重试，计入累计调用预算 |
 
-最新版本：[v2.0.0](https://github.com/ze157423150/backend-engineer-agent/releases/tag/v2.0.0) · [更新记录](CHANGELOG.md)
+最新版本：[v2.1.0](https://github.com/ze157423150/backend-engineer-agent/releases/tag/v2.1.0) · [更新记录](CHANGELOG.md)
 
 ## 快速开始
 
@@ -34,8 +34,8 @@ cp agent-local.properties.example agent-local.properties
 配置文件已存在时跳过最后一步。在编辑器中填写 `agent-local.properties` 的 `model.api-key`，不要加引号。本地配置已被 Git 忽略；没有密钥时可以先查看帮助或运行普通回归测试。
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar --help
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar --help
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --interactive --workspace examples/test-repair \
   --config agent-local.properties --max-model-calls 60
 ```
@@ -45,7 +45,7 @@ java -jar target/backend-engineer-agent-2.0.0.jar \
 也保留单次任务入口：
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --workspace examples/test-repair \
   --task "先运行测试定位失败，修复Calculator.add实现，不修改现有测试预期，再运行测试并解释结果" \
   --config agent-local.properties \
@@ -99,7 +99,7 @@ flowchart TD
 
 ```bash
 SESSION_ID='替换为会话UUID'
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --workspace examples/test-repair --continue-session "$SESSION_ID" \
   --message "补充负数和零值测试，保留已有测试，然后运行测试" \
   --config agent-local.properties --max-model-calls 30
@@ -115,7 +115,9 @@ java -jar target/backend-engineer-agent-2.0.0.jar \
 
 ## 测试结果
 
-最近一次常规回归：552 项通过，9 项 Docker 集成测试默认跳过，随后单独执行全部通过，失败与错误均为 0。
+最近一次常规回归：561 项通过，10 项 Docker 集成测试默认跳过，随后单独执行全部通过，失败与错误均为 0。自动恢复评测执行器另有 11 项离线测试通过。
+
+系统在自动检查点恢复重试支持下完成 64 轮长上下文代码任务验证：63 轮首次通过，第 11 轮自动回退重试一次后通过。共 432 次 API 请求、6,359,507 Token，包含失败尝试。该结果为恢复策略下的代码任务验收，不代表连续无失败运行或所有自然语言回答均正确。[评测结果与复现入口](docs/LONG_CONTEXT_EVALUATION.md)。
 
 已验证代码读写、测试反馈、上下文压缩、历史检索、会话恢复、会话切换、写回冲突检查和删除保护。详见 [测试结果](docs/VALIDATION.md)。
 
@@ -135,6 +137,7 @@ java -jar target/backend-engineer-agent-2.0.0.jar \
 | 运行与多轮演示 | [docs/DEMO.md](docs/DEMO.md) |
 | 架构、上下文与恢复设计 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | 测试结果 | [docs/VALIDATION.md](docs/VALIDATION.md) |
+| 长上下文与自动恢复评测 | [docs/LONG_CONTEXT_EVALUATION.md](docs/LONG_CONTEXT_EVALUATION.md) |
 | 编排与上下文 | [runtime](src/main/java/dev/backendagent/runtime) |
 | 模型请求与适配器 | [model](src/main/java/dev/backendagent/model) |
 | 工具与容器执行 | [tools](src/main/java/dev/backendagent/tools)、[sandbox](src/main/java/dev/backendagent/sandbox) |

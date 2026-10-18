@@ -133,4 +133,44 @@ class FullRequestBudgetTest {
         assertTrue(rejection.detail().contains("reasonCode=NO_COMPRESSION_GAIN"));
     }
 
+    @Test
+    void shrinkingHistoryReservesEvidenceThatWasInitiallyHiddenByItsVisibleOriginal() {
+        var session = new AgentSession("inspect retrieved contract");
+        var source = new ToolExchange(new ToolCall("contract", "read_file", Map.of("path", "contract.md")),
+                new ToolResult(true, "contract rule " + "a".repeat(900) + "\n" + "b".repeat(2100)), null, 1);
+        session.remember(source);
+        session.remember(exchange("padding-a", 2));
+        session.remember(exchange("padding-b", 3));
+        var evidence = dev.backendagent.history.HistoricalEvidence.excerpt(source, 1,
+                ObservationEvidence.Validity.UNKNOWN, 1, 1);
+        var retrieval = new ToolExchange(new ToolCall("retrieve", "read_observation",
+                Map.of("call_id", "contract", "start_line", "1", "end_line", "1")),
+                new ToolResult(true, evidence.getContent(), null, evidence), null, 4);
+        session.remember(retrieval);
+        session.retainHistoricalEvidence(retrieval);
+        var initial = new ContextAssembler(new ContextBudget(20000)).preview(session, List.of(), 2, null);
+        assertTrue(initial.historicalEvidence().isEmpty(), "Original is initially visible");
+        assertTrue(initial.history().contains(source));
+        var original = session.history();
+        var executed = new AtomicInteger();
+        ModelClient model = new ModelClient() {
+            public RequestBudgetReport inspectRequest(ModelRequest request) {
+                return new RequestBudgetReport(1000 + request.historyCharacters(), 500, 500, 9000);
+            }
+            public ModelResponse execute(ModelRequest request) {
+                executed.incrementAndGet();
+                assertTrue(inspectRequest(request).isWithinBudget());
+                assertFalse(request.history().stream().anyMatch(e -> e.call().id().equals("contract")));
+                assertEquals("contract", request.historicalEvidence().getFirst().getSourceCallId());
+                assertEquals(evidence.getContent(), request.historicalEvidence().getFirst().getContent());
+                assertEquals(retrieval, request.history().getLast(), "Keep the latest tool result intact");
+                return ModelResponse.finish("done");
+            }
+        };
+        new AgentRuntime(model, List.of(), 2, new ContextBudget(20000)).run(session);
+        assertEquals(AgentSession.Status.COMPLETED, session.status(), session.events().getLast().detail());
+        assertEquals(1, executed.get());
+        assertEquals(original, session.history());
+    }
+
 }

@@ -1,0 +1,10 @@
+MET-42：用status>400判断4xx遗漏400且包含5xx，报表出现双计数；另一问题是仅累加2xx耗时导致平均延迟虚低。
+观测：2026-10-01 replay run failed; old metrics and output are not expected results.
+1728000000685|auth-service|429|999
+1728000000822|api-gw|500|3600000
+1728000000959|billing|503|0
+1728000001096|auth-service|200|1
+1728000001233|api-gw|204|12
+1728000001370|billing|301|39
+1728000001507|AUTH-SERVICE|400|120
+1728000001644|api-gw|404|999

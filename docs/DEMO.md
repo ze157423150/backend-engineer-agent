@@ -38,13 +38,13 @@ cp agent-local.properties.example agent-local.properties
 文件读取统一返回文件头及源码行号，不提供格式选择参数；精确补丁去掉展示前缀、保留源码本身缩进，不为转换格式再读一次；准备精确补丁时，优先复用当前上下文中可见且文件指纹仍有效的读取片段、成功创建参数或成功补丁的 `new_text`。缺少所需片段、记录已退出上下文或文件指纹过期时，模型使用 `read_file` 补读必要范围，保留原始缩进和换行。同一文件补丁失败3次会要求重新读取，第4次失败停止；成功写入该文件后清零。`create_file` 可安全创建缺失父目录，成功返回创建指纹，无需为首次补丁额外读取；单条和批量补丁成功后返回写入后的完整文件指纹，可复用本次可见的 `new_text` 片段；不能拼接不同替换片段作为依据。文件再次变化、记录离开上下文或旧补丁没有指纹时，仍需重新读取。展示正文附带 `readMetadata`，总行数、实际范围和EOF标志用于定位；新记录标明format=numbered，旧raw记录仍兼容读取；重复范围会被标记，仍返回源码。整数测试期望值可用 `integer_calculate` 核对（支持括号和整数四则运算/取余，不执行代码），公式正确性仍需依据契约判断。`run_tests` 会标明 `testExecution` 和 `testsExecuted`；`NO_TESTS` 表示构建成功但未执行测试，不能作为回归通过。
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar --help
+java -jar target/backend-engineer-agent-2.1.0.jar --help
 ```
 
 ## 终端连续对话（推荐日常使用）
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --interactive --workspace examples/test-repair \
   --config agent-local.properties --data-dir .agent-sessions \
   --max-model-calls 60
@@ -82,7 +82,7 @@ Agent> ……测试结果……
 重新接入COMPLETED会话：
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --interactive --workspace examples/test-repair \
   --continue-session "实际的Session-ID" \
   --config agent-local.properties --data-dir .agent-sessions \
@@ -100,7 +100,7 @@ java -jar target/backend-engineer-agent-2.0.0.jar \
 [Calculator.java](../examples/test-repair/src/main/java/example/Calculator.java) 故意把 add 写成减法，[CalculatorTest.java](../examples/test-repair/src/test/java/example/CalculatorTest.java) 要求 `add(2, 3) == 5`。
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --workspace examples/test-repair \
   --task "先调用run_tests定位CalculatorTest失败；修复Calculator.add的实现，不要修改现有测试或预期值。再调用run_tests验证，并用workspace_diff检查改动，最终解释修复和测试结果。" \
   --config agent-local.properties \
@@ -118,7 +118,7 @@ java -jar target/backend-engineer-agent-2.0.0.jar \
 
 ```bash
 SESSION_ID='替换为会话UUID'
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --workspace examples/test-repair \
   --continue-session "$SESSION_ID" \
   --message "继续在同一会话中，为Calculator.add补充负数和零值测试，保留现有测试不变；运行run_tests并说明实际测试结果。" \
@@ -129,12 +129,12 @@ java -jar target/backend-engineer-agent-2.0.0.jar \
 
 第二轮继承第一轮工作副本和历史，`User turn` 增至2；调用上限30是整个会话累计额度。运行前要求第一轮已经COMPLETED，不能用追加需求入口替代失败或预算恢复。
 
-短演示通常不会达到摘要触发门槛。更多验证结果见[测试结果](VALIDATION.md)。
+短演示通常不会达到摘要触发门槛。更多验证结果见[测试结果](VALIDATION.md)。自动检查点回退重试使用独立[长上下文评测入口](LONG_CONTEXT_EVALUATION.md)，不改变普通终端的显式恢复操作。
 
 ## 4. 查询和检查产物
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --show-session "$SESSION_ID" --data-dir .agent-sessions
 ```
 
@@ -159,7 +159,7 @@ java -jar target/backend-engineer-agent-2.0.0.jar \
 预算耗尽时继续原轮次，不追加用户消息：
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --workspace examples/test-repair --resume-session "$SESSION_ID" \
   --config agent-local.properties --data-dir .agent-sessions \
   --max-model-calls 50
@@ -168,7 +168,7 @@ java -jar target/backend-engineer-agent-2.0.0.jar \
 FAILED时使用独立入口：
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --workspace examples/test-repair --resume-failed-session "$SESSION_ID" \
   --config agent-local.properties --data-dir .agent-sessions \
   --max-model-calls 50
@@ -181,7 +181,7 @@ java -jar target/backend-engineer-agent-2.0.0.jar \
 ## 6. 导出到新目录
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --export-session "$SESSION_ID" \
   --output-workspace /tmp/backend-agent-review-copy \
   --data-dir .agent-sessions
@@ -203,7 +203,7 @@ Agent 修改的是 `.agent-sessions/<UUID>/workspace`。本轮完成后在终端
 写回信息保存在会话目录的 `source-sync.json`，重新打开已完成会话后仍可继续使用：
 
 ```bash
-java -jar target/backend-engineer-agent-2.0.0.jar \
+java -jar target/backend-engineer-agent-2.1.0.jar \
   --interactive --continue-session "$SESSION_ID" \
   --workspace examples/test-repair --config agent-local.properties \
   --max-model-calls 60

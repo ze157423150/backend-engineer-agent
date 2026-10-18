@@ -34,7 +34,7 @@ public final class ApplyPatchBatchTool implements Tool {
                 if(source!=dev.backendagent.runtime.PatchSourceStatus.CURRENT)
                     return new ToolResult(false,"补丁 "+edit.getId()+"："+source.feedback()+"；本组全部未写入。");
             }
-            var result=workspace.applyPatchBatch(path,baseline.getSha256(),edits);
+            var result=workspace.applyPatchBatch(path,baseline.getSha256(),edits).withPatchBase(baseline);
             if(result.successful())session.invalidateFileEvidence(path);
             return result;
         }catch(dev.backendagent.persistence.PersistenceException uncertain){throw uncertain;}

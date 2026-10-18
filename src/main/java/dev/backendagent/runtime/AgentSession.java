@@ -587,9 +587,13 @@ public final class AgentSession {
                     replaced=edits.stream().anyMatch(edit->edit.getOldText().contains(oldText)&&!edit.getNewText().contains(oldText));
                 }
                 else if(entry.call().name().equals("read_file")) {
-                    source=entry.result().content();
-                    if(!(entry.result().readMetadata()==null ? "raw".equals(entry.call().arguments().get("format"))
-                            : entry.result().readMetadata().usesRawText(entry.call().arguments().get("format")))) {
+                    // Only a still-selected read hidden specifically by version invalidation may be
+                    // recovered for exact patch verification; ordinary archived/omitted bodies stay hidden.
+                    var read=entry.result().content().startsWith("[STALE_OBSERVATION_BODY_OMITTED]")
+                            ? originalObservation(entry.call().id()) : entry;
+                    source=read.result().content();
+                    if(!(read.result().readMetadata()==null ? "raw".equals(read.call().arguments().get("format"))
+                            : read.result().readMetadata().usesRawText(read.call().arguments().get("format")))) {
                         var text=new StringBuilder();
                         for(String line:source.split("\\n",-1)) {
                             if(line.matches("\\d+: .*"))text.append(line.substring(line.indexOf(": ")+2)).append('\n');
@@ -602,7 +606,8 @@ public final class AgentSession {
                 boolean fresh=saved.equals(current)
                         && !(entry.call().name().equals("read_file")&&staleEvidenceIds.contains(entry.call().id()));
                 boolean matches=source!=null&&source.contains(oldText);
-                if(fresh&&matches)return PatchSourceStatus.CURRENT;
+                if(matches&&(fresh||PatchSourceRebaser.canReuse(entry,oldText,current,history)))
+                    return PatchSourceStatus.CURRENT;
                 currentFragment|=fresh;
                 changedSource|=matches&&!fresh;
                 previouslyReplaced|=fresh&&replaced;

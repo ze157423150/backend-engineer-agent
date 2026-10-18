@@ -1,0 +1,10 @@
+ALR-73：serverErrors/total先整数除法再乘10000，少量错误总是显示0；使用>导致恰好20%不报警，低流量单个5xx被误报。
+观测：2026-10-01 replay run failed; old metrics and output are not expected results.
+1728000002055|api-gw|503|1
+1728000002192|billing|200|12
+1728000002329|auth-service|204|39
+1728000002466|api-gw|301|120
+1728000002603|billing|400|999
+1728000002740|auth-service|404|3600000
+1728000002877|api-gw|429|0
+1728000003014|BILLING|500|1

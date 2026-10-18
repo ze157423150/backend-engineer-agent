@@ -467,19 +467,26 @@ public final class AgentRuntime {
         var filtered = StaleObservationFilter.filter(raw).stream()
                 .map(new ToolResultCompressor()::prune).toList();
         for (int i = latestStart; i < raw.size(); i++) { minimumCharacters += configuredHistoryBudget.measure(filtered.get(i)); }
+        // Shrinking the suffix may hide a retrieved source and make its evidence cache visible.
+        // Reserve all current evidence, subtracting the cache already included in the initial view.
+        minimumCharacters += session.historicalEvidenceForContext().stream()
+                .mapToLong(dev.backendagent.history.HistoricalEvidence::characterCount).sum()
+                - initial.historicalEvidence().stream()
+                    .mapToLong(dev.backendagent.history.HistoricalEvidence::characterCount).sum();
         int minimumLimit = (int) Math.max(1, minimumCharacters);
         var minimumBudget = new ContextBudget(minimumLimit);
-        var minimum = new ContextAssembler(minimumBudget).preview(session, definitions, remaining, summary, dialogueSummary);
-        var minimumReport = model.inspectRequest(minimum);
-        if (minimumReport.isWithinBudget()) { best = new PreparedContext(minimum, minimumBudget, minimumReport); }
+        var minimum = previewBudgetCandidate(session, definitions, remaining, summary, dialogueSummary, minimumBudget);
+        if (minimum != null) {
+            var minimumReport = model.inspectRequest(minimum);
+            if (minimumReport.isWithinBudget()) { best = new PreparedContext(minimum, minimumBudget, minimumReport); }
+        }
         int low = minimumLimit;
         int high = configuredHistoryBudget.getMaxHistoryCharacters() - 1;
         while (low <= high) {
             int mid = low + (high - low) / 2;
             var candidateBudget = new ContextBudget(mid);
-            dev.backendagent.model.ModelRequest candidate;
-            try { candidate = new ContextAssembler(candidateBudget).preview(session, definitions, remaining, summary, dialogueSummary); }
-            catch (IllegalStateException protectedContentTooLarge) { low = mid + 1; continue; }
+            var candidate = previewBudgetCandidate(session, definitions, remaining, summary, dialogueSummary, candidateBudget);
+            if (candidate == null) { low = mid + 1; continue; }
             var candidateReport = model.inspectRequest(candidate);
             if (candidateReport.isWithinBudget()) {
                 best = new PreparedContext(candidate, candidateBudget, candidateReport);
@@ -492,6 +499,20 @@ public final class AgentRuntime {
         }
         if (install) { session.installProjection(best.request().contextProjection()); }
         return best;
+    }
+
+    /** A capacity miss rejects one candidate, not the session; other state failures remain fatal. */
+    private dev.backendagent.model.ModelRequest previewBudgetCandidate(AgentSession session,
+            List<dev.backendagent.tools.ToolDefinition> definitions, int remaining, ContextSummary summary,
+            ConversationSummary dialogueSummary, ContextBudget allowance) {
+        try {
+            return new ContextAssembler(allowance).preview(session, definitions, remaining, summary, dialogueSummary);
+        } catch (IllegalStateException failure) {
+            String message = failure.getMessage();
+            if (message != null && (message.startsWith("Latest tool batch exceeds history character budget;")
+                    || message.startsWith("Summary exceeds history budget;"))) { return null; }
+            throw failure;
+        }
     }
 
     private void compactConversationIfNeeded(AgentSession session) { compactConversationIfNeeded(session,false); }

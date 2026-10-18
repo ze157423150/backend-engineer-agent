@@ -1,0 +1,10 @@
+LAT-11：P95用了floor(n*0.95)作为数组下标。20条时误取第20条，应该取第19条；P100数组越界，排序原列表还改变了调用方顺序。
+观测：2026-10-01 replay run failed; old metrics and output are not expected results.
+1728000001370|billing|301|39
+1728000001507|AUTH-SERVICE|400|120
+1728000001644|api-gw|404|999
+1728000001781|billing|429|3600000
+1728000001918|auth-service|500|0
+1728000002055|api-gw|503|1
+1728000002192|billing|200|12
+1728000002329|auth-service|204|39

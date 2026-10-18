@@ -55,3 +55,11 @@ redis-data/
 
 # Local resume documents
 /*.pdf
+
+# Synthetic evaluation fixtures are source inputs, not local runtime data.
+!/fixtures/long-context/seed/data/
+!/fixtures/long-context/seed/data/**
+
+# Python evaluation helpers
+__pycache__/
+*.py[cod]

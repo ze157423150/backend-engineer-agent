@@ -1,0 +1,10 @@
+PARSE-19：末尾空耗时被split丢弃，部分任务直接出现ArrayIndexOutOfBoundsException；不能捕获异常后返回正常记录。后续同批其他有效日志必须继续处理。
+观测：2026-10-01 replay run failed; old metrics and output are not expected results.
+1728000000000|API-GW|200|0
+1728000000137|billing|204|1
+1728000000274|auth-service|301|12
+1728000000411|api-gw|400|39
+1728000000548|billing|404|120
+1728000000685|auth-service|429|999
+1728000000822|api-gw|500|3600000
+1728000000959|billing|503|0

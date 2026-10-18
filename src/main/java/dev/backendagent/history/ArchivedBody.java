@@ -40,7 +40,7 @@ public final class ArchivedBody {
                 + text.substring(text.length() - 600);
         return new ToolExchange(original.call(), new ToolResult(original.result().successful(), excerpt,
                 original.result().fileFingerprint(), original.result().historicalEvidence(),
-                original.result().readMetadata()==null?null:original.result().readMetadata().excerpt()), original.assistantContent(), original.modelCallNumber(),
+                original.result().readMetadata()==null?null:original.result().readMetadata().excerpt(), original.result().patchBaseFingerprint()), original.assistantContent(), original.modelCallNumber(),
                 original.evidence(), reference);
     }
 
