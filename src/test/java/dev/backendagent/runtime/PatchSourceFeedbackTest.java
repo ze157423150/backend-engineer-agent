@@ -27,6 +27,38 @@ class PatchSourceFeedbackTest {
         assertFalse(s.hasCurrentPatchSource("Main.java", "second", w));
     }
 
+    @Test void searchHitCannotAuthorizeWholeFilePatchButTargetedReadCan() throws Exception {
+        String before="package sample;\nclass Main { int n = 1; }\n";
+        String after=before.replace("n = 1", "n = 2");
+        Files.writeString(root.resolve("Main.java"),before);
+        var w=workspace();var s=new AgentSession("edit Main");var step=new AtomicInteger();
+        new AgentRuntime(request->switch(step.getAndIncrement()) {
+            case 0 -> ModelResponse.callTool(new ToolCall("search","search_code",Map.of("path",".","query","class Main")));
+            case 1 -> {
+                assertTrue(request.history().getLast().result().content().contains("class Main"));
+                assertFalse(request.history().getLast().result().content().contains("package sample"));
+                yield ModelResponse.callTool(new ToolCall("unverified","apply_patch",Map.of("path","Main.java","old_text",before,"new_text",after)));
+            }
+            case 2 -> {
+                var rejected=request.history().getLast().result();
+                assertFalse(rejected.successful());
+                assertTrue(rejected.content().contains("PATCH_SOURCE_SOURCE_NOT_VISIBLE"));
+                assertTrue(rejected.content().contains("search_code命中仅用于定位"));
+                assertTrue(rejected.content().contains("整文件重写须获取全文"));
+                assertEquals(0,s.workspaceState().getRevision());
+                assertEquals(PatchSourceStatus.SOURCE_NOT_VISIBLE,s.assessCurrentPatchSource("Main.java",before,w));
+                yield ModelResponse.callTool(new ToolCall("read","read_file",Map.of("path","Main.java","start_line","1","end_line","10")));
+            }
+            case 3 -> ModelResponse.callTool(new ToolCall("verified","apply_patch",Map.of("path","Main.java","old_text",before,"new_text",after)));
+            default -> ModelResponse.finish("done");
+        },List.of(new SearchCodeTool(w),new ReadFileTool(w),new ApplyPatchTool(w,s)),5).run(s);
+        assertEquals(AgentSession.Status.COMPLETED,s.status());
+        assertEquals(after,Files.readString(root.resolve("Main.java")));
+        assertTrue(s.history().getLast().result().successful());
+        assertEquals(1,s.workspaceState().getRevision());
+        assertEquals(1,s.history().stream().filter(e->e.call().name().equals("read_file")).count());
+    }
+
     @Test void unchangedTextWithDifferentWholeFileHashStillRequiresFreshSource() throws Exception {
         Files.writeString(root.resolve("Main.java"), "first\nsecond\n");
         var w=workspace(); var s=new AgentSession("edit"); read(s,w,"1");

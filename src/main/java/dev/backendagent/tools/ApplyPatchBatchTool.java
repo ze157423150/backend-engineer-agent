@@ -12,7 +12,7 @@ public final class ApplyPatchBatchTool implements Tool {
     private final AgentSession session;
     public ApplyPatchBatchTool(WorkspaceAccess workspace,AgentSession session){this.workspace=workspace;this.session=session;}
     public String name(){return "apply_patch_batch";}
-    public ToolDefinition definition(){return new ToolDefinition(name(),"一次修改同一文件的1..16处不重叠文本。全部补丁按同一当前原文定位，先全量检查再原子写入；任一冲突整组不写。"
+    public ToolDefinition definition(){return new ToolDefinition(name(),"修改已有文件的1..16处不重叠文本；整文件重写可直接用apply_patch，将完整旧文件替换为完整新文件。全部补丁按同一当前原文定位，先全量检查再原子写入；任一冲突整组不写。"
             +"patches为JSON数组字符串，每项含id、old_text、new_text；id须唯一。每项只替换匹配片段，保留其余内容；整文件更新须匹配完整旧文件，不用第一行替换整份内容。不要依赖同组前一修改的新文本。重叠时反馈冲突ID及原文字符范围，请合并或去重后重提。",
             Map.of("path","工作区相对文件路径","patches","JSON数组字符串，例如[{\"id\":\"a\",\"old_text\":\"old\",\"new_text\":\"new\"}]"));}
     public static List<PatchEdit> decode(String value)throws java.io.IOException{

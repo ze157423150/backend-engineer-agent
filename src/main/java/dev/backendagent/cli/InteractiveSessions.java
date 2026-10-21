@@ -201,7 +201,7 @@ public final class InteractiveSessions {
                         new SearchCodeTool(workspace), new SearchTurnsTool(session), new ReadTurnTool(session), new RememberFactTool(session),
                         new ApplyPatchTool(workspace, session), new CreateFileTool(workspace, session), new WorkspaceDiffTool(workspace), new RunTestsTool(workspace, sandbox));
                 IntFunction<AgentRuntime> runtime = cap -> new AgentRuntime(model, tools, cap,
-                        new ContextBudget(options.getMaxHistoryCharacters()), options.getMinimumSummaryInputCharacters(), output::println);
+                        new ContextBudget(options.getMaxHistoryCharacters()), options.getMinimumSummaryInputCharacters(), output::println).withToolSelection(options.isToolSelectionEnabled());
                 if (id == null && initialCreation && options.getMemoryFrom() != null) {
                     new dev.backendagent.memory.MemoryLoader().load(store, options.getMemoryFrom(), workspace, session);
                 }

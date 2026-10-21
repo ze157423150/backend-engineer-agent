@@ -1,7 +1,7 @@
 package dev.backendagent.model;
 
 /** Application-owned message and typed diagnostic; deliberately excludes raw causes. */
-public final class ModelCallFailure extends IllegalStateException {
+public class ModelCallFailure extends IllegalStateException {
     private final ModelFailureDiagnostic diagnostic;
     public ModelCallFailure(String message, ModelFailureDiagnostic diagnostic) {
         super(message);

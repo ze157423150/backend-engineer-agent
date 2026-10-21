@@ -17,7 +17,7 @@ public final class ApplyPatchTool implements Tool {
 
     public String name() { return "apply_patch"; }
     public ToolDefinition definition() {
-        return new ToolDefinition(name(), "精确替换已有文本文件中的一处内容。可复用带当前文件指纹的读取、成功创建或成功补丁片段，中间仅有可核验且不影响该旧片段的补丁时也可复用，无需重复读取；旧文本只允许匹配一次；只替换匹配片段，其余内容保留。整文件更新须匹配完整旧文件，不能用第一行替换为整份内容。"
+        return new ToolDefinition(name(), "修改已有文本文件，支持局部替换和整文件重写。整文件重写时，old_text填完整旧文件，new_text填完整新文件；不使用create_file覆盖。局部替换只改匹配片段，其余内容保留；不能用第一行匹配代替完整旧文件。可复用带当前指纹的读取、创建content或成功补丁片段；受控修改未影响目标片段时也可复用，无需重复读取；旧文本必须唯一匹配。"
                 + "同文件多处修改优先apply_patch_batch；同一响应中连续同文件补丁会整组校验，重叠整组拒绝。支持片段删除，不创建或删除文件，不执行命令。", Map.of(
                 "path", "工作区相对文件路径", "old_text", "从可见且指纹有效的读取、创建content或成功补丁new_text复制，保留缩进换行；缺少片段时read_file",
                 "new_text", "替换后的文本，可为空；新旧文本各最多 24000 字符"));

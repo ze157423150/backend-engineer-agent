@@ -32,6 +32,45 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DeepSeekModelClientTest {
+    @Test void discoveryInstructionOnlyAppearsWhenSearchIsAvailable() throws Exception {
+        var adapter = client(Duration.ofSeconds(5));
+        var full = adapter.buildRequest(new ModelRequest("inspect", List.of(), List.of(), 3));
+        assertFalse(full.path("messages").get(0).path("content").asText().contains("当前工具列表经过筛选"));
+        var selected = adapter.buildRequest(new ModelRequest("inspect", List.of(),
+                List.of(dev.backendagent.selection.ToolDiscovery.definition()), 3));
+        assertTrue(selected.path("messages").get(0).path("content").asText().contains("结果为空时换更宽泛描述"));
+        assertEquals(1, selected.path("tools").size());
+        assertEquals("search_tools", selected.path("tools").get(0).path("function").path("name").asText());
+    }
+
+    @Test void undiscoveredToolIsRejectedUntilItsSchemaIsProvided() throws Exception {
+        var adapter = client(Duration.ofSeconds(5));
+        String response = toolResponse("{\"query\":\"cancel\"}").replace("read_file", "search_code");
+        var hidden = new ModelRequest("inspect", List.of(), List.of(dev.backendagent.selection.ToolDiscovery.definition()), 3);
+        responses.add(response);
+        assertThrows(ModelCallFailure.class, () -> adapter.execute(hidden));
+        var definition = new dev.backendagent.tools.ToolDefinition("search_code", "搜索代码", java.util.Map.of("query", "关键词"));
+        var visible = new ModelRequest("inspect", List.of(), List.of(definition,dev.backendagent.selection.ToolDiscovery.definition()), 3);
+        responses.add(response);
+        assertEquals("search_code", adapter.execute(visible).getToolCalls().getFirst().name());
+    }
+
+    @Test void hiddenCallRejectsWholeBatchBeforeExecutingVisibleCalls() throws Exception {
+        var adapter = client(Duration.ofSeconds(5));
+        var response = (ObjectNode)json.readTree(toolResponse("{\"path\":\"a.java\",\"start_line\":1,\"end_line\":2}"));
+        var calls = (com.fasterxml.jackson.databind.node.ArrayNode)response.path("choices").get(0).path("message").path("tool_calls");
+        var hidden = calls.get(0).deepCopy();
+        ((ObjectNode)hidden).put("id","hidden-call"); ((ObjectNode)hidden.path("function")).put("name","create_file");
+        calls.add(hidden);
+        responses.add(response.toString());
+        var available = new dev.backendagent.tools.ToolDefinition("read_file","读取",java.util.Map.of("path","路径","start_line","起始","end_line","结束"));
+        var failure = assertThrows(UndeclaredToolCallFailure.class, () -> adapter.execute(
+                new ModelRequest("inspect",List.of(),List.of(available,dev.backendagent.selection.ToolDiscovery.definition()),3)));
+        assertEquals(List.of("create_file"),failure.getProposedNames());
+        assertEquals(ModelFailureDiagnostic.Code.UNDECLARED_TOOL,failure.getDiagnostic().getCode());
+        assertFalse(json.writeValueAsString(failure.getDiagnostic()).contains("create_file"));
+    }
+
     @Test void refinementSendsOnlyCandidateFactsAndRestoresTheSelectedSource() throws Exception {
         var note=new dev.backendagent.runtime.SummaryNote(dev.backendagent.runtime.SummaryNote.Kind.PROGRESS,
                 "保留公共接口", "turn-1-user", "不修改公共接口",dev.backendagent.runtime.SummarySection.CONSTRAINTS);
@@ -345,7 +384,10 @@ class DeepSeekModelClientTest {
         responses.add(finalResponse("done"));
         client(Duration.ofSeconds(5)).execute(new ModelRequest("inspect", List.of(), List.of(readTool.definition()), 1));
         assertEquals(4096, requests.getFirst().path("max_tokens").asInt());
-        assertTrue(requests.getFirst().path("messages").get(0).path("content").asText().contains("一次只创建一个文件"));
+        String prompt = requests.getFirst().path("messages").get(0).path("content").asText();
+        assertTrue(prompt.contains("新建大文件一次只处理一个"));
+        assertTrue(prompt.contains("已有文件整文件重写也用apply_patch"));
+        assertTrue(prompt.contains("old_text为完整旧文件，new_text为完整新文件"));
     }
 
     @Test

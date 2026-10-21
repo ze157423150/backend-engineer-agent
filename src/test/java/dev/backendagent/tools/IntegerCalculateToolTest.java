@@ -10,7 +10,10 @@ class IntegerCalculateToolTest {
         assertTrue(tool.execute(Map.of("expression","2500-(3-1)*1000")).content().contains("value=500"));
     }
     @Test void respectsPrecedenceParenthesesAndJavaSignedDivision(){
-        assertTrue(tool.execute(Map.of("expression","2+3*4")).content().contains("value=14"));
+        var percentile=tool.execute(Map.of("expression","(75*4+99)/100"));
+        assertTrue(percentile.successful());
+        assertEquals("value=3",percentile.content());
+        assertEquals("value=14",tool.execute(Map.of("expression","2+3*4")).content());
         assertTrue(tool.execute(Map.of("expression","-(7/3) + (-7%3)")).content().contains("value=-3"));
         assertTrue(tool.execute(Map.of("expression","(2+3)*4")).content().contains("value=20"));
     }

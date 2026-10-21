@@ -512,8 +512,8 @@ public final class DeepSeekModelClient implements ModelClient {
                 + "按当前修改点定向获取必要代码、契约和测试片段后，立即进行最小修改并验证；不要求读齐所有相关文件或遍历目录。已有路径可直接读取；仅在存在具体信息缺口时继续探索。"
                 + "一次读取覆盖当前修改点的完整方法或测试块；可见且指纹有效的读取片段、创建content或补丁new_text直接复用。不要为了再次确认而重读；previouslyRead=true表示同哈希范围近期已读，不是核验失败。"
                 + "read_file统一返回带file头及源码行号的文本，不提供格式选择；readMetadata给出实际范围及文件末尾。精确补丁须去掉file头及每行展示用的数字加冒号空格前缀，保留源码本身的缩进和内容，不为转换格式重复读取。只有修改所需原文缺失、指纹过期或匹配失败时补读必要范围；仅理解规则时优先使用已展示的有效依据，bodyComplete=false不能当完整源码。\n"
-                + "仅在用户要求且工具支持时写入；新增文件确认目标目录和项目约定后用create_file，可安全创建缺失父目录，不要把JUnit测试移入src/main。已有创建记录的同一路径后续用补丁更新，不重复create_file；任务明确要求新建的缺失文件可直接创建，不把读取失败当环境故障。"
-                + "可一次请求多个工具，按序执行；依赖返回结果的操作留到下次请求。代码及参数占输出额度，大文件一次只创建一个文件，大修改拆成多次小补丁。"
+                + "仅在用户要求且工具支持时写入；已有文件使用apply_patch或apply_patch_batch修改，即使已生成完整新内容也不能用create_file覆盖。仅在确定目标不存在时用create_file；已有读取或创建记录表明文件存在，不重复创建。新增文件确认目标目录和项目约定，可安全创建缺失父目录，不要把JUnit测试移入src/main；任务明确要求新建的缺失文件可直接创建，不把读取失败当环境故障。"
+                + "可一次请求多个工具，按序执行；依赖返回结果的操作留到下次请求。已有文件整文件重写也用apply_patch，old_text为完整旧文件，new_text为完整新文件。代码及参数占输出额度，控制单次参数长度，超过输出额度时分步修改；新建大文件一次只处理一个。"
                 + "同文件多处不重叠修改优先apply_patch_batch，基于同一原文；连续同文件apply_patch由运行层归并。重叠或基线旧文本冲突则整组不写入，PATCH_OVERLAP需按冲突ID合并或去重重提，不能假设部分成功，也不能依赖同组前一补丁的新文本。"
                 + "历史补丁old_text是修改前文本，new_text是当次写入文本；它们用于追溯改动，不是业务期望值。"
                 + "补丁须有实际变化；JSON解码后的文本必须与源码一致，不把换行或引号重复转义成源码字面量。"
@@ -530,7 +530,7 @@ public final class DeepSeekModelClient implements ModelClient {
                 + "核对输入、单位、边界、字段布局及本轮规则变更；不得从当前实现输出、旧测试断言或另一输入样例反推正确期望值。"
                 + "对多条记录聚合、分类计数、百分位或边界计算等复杂用例，先按最终输入及适用规则逐项区分有效、非法及跳过项，核对测试输入自身是否合法，推导分类数量及期望值，在测试方法中用简短注释集中说明关键推导，再编写断言；简单断言无需逐条解释。核对输入、推导、注释与断言一致；用户指定的测试输入不得自行更换、增删或补造样本；只有用户要求变更或契约明确证明输入不合法时才调整，并说明依据。输入修改后重新核对受影响的期望值。百分位须将秩映射到当前排序数据的具体值，不能把秩当结果。"
                 + "新建或修改有业务位置的数组断言时，必须使用JUnit第三个消息参数：assertArrayEquals(expected, actual, \"被测方法: 字段0,字段1,...\")，仅写布局注释不满足此要求。生成消息前，根据该方法契约核对当前源码的实际返回顺序，不能套用旧测试、历史回答或其他方法的布局；当前有效片段足够时直接复用，无法确定才定向补读。消息仅作定位线索，不证明布局或期望值正确；保留数组断言，不逐字段声明变量或拆成多条断言。"
-                + "若有integer_calculate，大整数、分页等计算按契约公式核对，包含最终除数；工具只验证计算，不证明测试逻辑。"
+                + "若有integer_calculate，生成或修改涉及算术推导的测试期望值时，按契约确定运算语义，用工具核对最终样例实际采用的算式（含最终除数），不要只验证示例而漏掉后续新增样例；可同批核对多个算式，已有相同算式的可见结果直接复用。仅核对工具支持的整数运算；工具只验证计算，不证明公式或测试逻辑正确。"
                 + "测试失败先结合最新诊断、对应完整用例与契约，确认被测方法及返回结构，将失败索引或字段映射到该方法的业务含义，核对失败索引、断言消息中的字段及当前源码返回位置是否一致；不一致时先修正说明，再结合用户需求及契约判断实现或期望值是否错误，不能仅凭实现认定正确。不同方法的同一索引含义可能不同。"
                 + "数组断言通常只报告首个差异，后续字段未报错不代表正确；分类计数或关联字段失败时，按本轮实际输入一次复核整组相关期望、分类合计及注释，一并修正有依据的错误，不逐个试值迎合actual。先确认失败用例的数据来源：内嵌输入的用例不通过修改外部回放文件来修复；不得虚构下一轮需求或数据。再按当前输入核对该字段的期望，只定向检查能影响该字段的数据路径，区分实现、测试、编译或环境问题；证据明确指向断言时修正断言并重测，不在没有具体疑点时巡检无关模块。不能顺着错误注释修改输入，也不能为变绿迎合实现。"
                 + "优先定点修复当前失败；修改已通过用例应有需求变更或明确契约理由，不能顺手重写。已有完整片段可直接复用，不要求机械重读，也不要无修改重复失败操作。\n"
@@ -653,6 +653,12 @@ public final class DeepSeekModelClient implements ModelClient {
             }
         }
 
+        if (request.availableTools().stream().anyMatch(t -> t.getName().equals("search_tools"))) {
+            ObjectNode system = (ObjectNode) messages.get(0);
+            system.put("content", system.path("content").asText()
+                    + "\n当前工具列表经过筛选，不代表全部能力。历史出现过的工具不代表本次可用，实际调用以本次tools定义为准，不自行编造工具名称。文件探索、修改、测试、计算、历史检索等能力可能尚未展示。缺少所需工具时先调用search_tools，按用途或名称查询；结果为空时换更宽泛描述再次搜索，运行层会扩大范围并最终恢复全部工具。"
+                    + "新工具的参数定义在下一次模型请求中提供，不要在本次同批调用尚未展示的工具。工具搜索只发现能力，不执行实际操作。");
+        }
         if (!request.availableTools().isEmpty()) {
             var tools = body.putArray("tools");
             for (ToolDefinition definition : request.availableTools()) {
@@ -719,6 +725,14 @@ public final class DeepSeekModelClient implements ModelClient {
             if (calls == null || !calls.isArray() || calls.isEmpty()) {
                 throw new IllegalStateException("Expected at least one tool call");
             }
+            // Inspect the complete batch before accepting any arguments. Recovery only expands definitions;
+            // none of the rejected batch is executed or replayed automatically.
+            var unavailable = new java.util.LinkedHashSet<String>();
+            for (JsonNode call : calls) {
+                String proposed = requiredText(call.path("function"), "name");
+                if (request.availableTools().stream().noneMatch(t -> t.getName().equals(proposed))) unavailable.add(proposed);
+            }
+            if (!unavailable.isEmpty()) throw new UndeclaredToolCallFailure(java.util.List.copyOf(unavailable), finish);
             var parsedCalls = new ArrayList<ToolCall>();
             for (JsonNode call : calls) {
                 if (!"function".equals(requiredText(call, "type"))) {

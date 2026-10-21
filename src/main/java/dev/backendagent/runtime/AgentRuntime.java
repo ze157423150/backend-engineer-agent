@@ -20,6 +20,7 @@ import static dev.backendagent.runtime.AgentSession.Status.*;
 
 /** Synchronous, single-worker runtime with an optional persistent session event sink. */
 public final class AgentRuntime {
+    private dev.backendagent.selection.ToolDiscovery toolDiscovery;
     private final ModelClient model;
     private final boolean verificationBasisEnabled;
     private final Map<String, Tool> tools = new LinkedHashMap<>();
@@ -74,6 +75,31 @@ public final class AgentRuntime {
         if (this.tools.get("apply_patch") instanceof dev.backendagent.tools.ApplyPatchTool patch) {
             this.tools.putIfAbsent("apply_patch_batch", patch.batchTool());
         }
+    }
+
+    /** Opt-in experiment; the default remains the complete catalog. */
+    public AgentRuntime withToolSelection(boolean enabled) {
+        toolDiscovery = enabled ? new dev.backendagent.selection.ToolDiscovery(
+                tools.values().stream().map(Tool::definition).toList()) : null;
+        return this;
+    }
+
+    public AgentRuntime withToolSelection(dev.backendagent.selection.ToolSelector selector, int initialLimit) {
+        toolDiscovery = new dev.backendagent.selection.ToolDiscovery(
+                tools.values().stream().map(Tool::definition).toList(), selector, initialLimit);
+        return this;
+    }
+
+    public AgentRuntime withToolSelection(dev.backendagent.selection.ToolSelector selector, int initialLimit,
+            dev.backendagent.selection.ToolSearchRanker searchRanker) {
+        toolDiscovery = new dev.backendagent.selection.ToolDiscovery(
+                tools.values().stream().map(Tool::definition).toList(), selector, initialLimit, searchRanker);
+        return this;
+    }
+
+    private List<dev.backendagent.tools.ToolDefinition> definitions(AgentSession session) {
+        return toolDiscovery == null ? tools.values().stream().map(Tool::definition).toList()
+                : toolDiscovery.definitions(session);
     }
 
     public void run(AgentSession session) {
@@ -285,7 +311,7 @@ public final class AgentRuntime {
         return true;
     }
 
-    /** Retries one unchanged task request; no compaction or tool execution occurs between attempts. */
+    /** Transport retries preserve context; undeclared tools trigger bounded definition recovery, never execution. */
     private ModelResponse executeModelWithRetry(AgentSession session, dev.backendagent.model.ModelRequest context) {
         for (int attempt = 1; ; attempt++) {
             session.countModelCall();
@@ -295,6 +321,13 @@ public final class AgentRuntime {
                 var diagnostic = failure.getDiagnostic();
                 session.append(MODEL_CALL_FAILED, diagnostic.detail() + ", attempt=" + attempt, diagnostic);
                 if (!diagnostic.isRetryable() || attempt >= 3 || session.modelCalls() >= maxModelCalls) throw failure;
+                if (failure instanceof dev.backendagent.model.UndeclaredToolCallFailure unavailable && toolDiscovery != null) {
+                    session.append(MODEL_RETRY_SCHEDULED, toolDiscovery.recoveryEvent(session, unavailable.getProposedNames()));
+                    session.checkpoint();
+                    context = prepareContext(session).request();
+                    progress.accept("工具定义不完整，已补充可用定义；上次批次未执行，重新请求模型。");
+                    continue;
+                }
                 long delayMillis = 250L * attempt;
                 session.append(MODEL_RETRY_SCHEDULED, "nextAttempt=" + (attempt + 1) + ", delayMillis=" + delayMillis);
                 progress.accept("模型请求失败（" + diagnostic.getCode() + "），准备第" + (attempt + 1) + "次尝试");
@@ -322,7 +355,7 @@ public final class AgentRuntime {
             // Save the pre-execution workspace hash; ambiguous changes cannot be silently replayed.
             session.checkpoint();
             session.append(TOOL_EXECUTION_STARTED, "callId=" + call.id(), session.pendingToolBatch());
-            ToolResult result = executeTool(call);
+            ToolResult result = executeTool(call, session);
             if (call.name().equals("run_tests")) {
                 result = new ToolResult(result.successful(), "workspaceRevision="
                         + session.workspaceState().getRevision() + "\n" + result.content());
@@ -372,7 +405,7 @@ public final class AgentRuntime {
     private dev.backendagent.model.ModelRequest pressureView(AgentSession session,ContextSummary toolsSummary,ConversationSummary dialogue) {
         session.refreshVerificationBasis();
         return new ContextAssembler(configuredHistoryBudget).previewUntrimmed(session,
-                tools.values().stream().map(Tool::definition).toList(),maxModelCalls-session.modelCalls(),toolsSummary,dialogue);
+                definitions(session),maxModelCalls-session.modelCalls(),toolsSummary,dialogue);
     }
     private boolean exceedsRequestBudget(dev.backendagent.model.RequestBudgetReport report) {
         return report != null && !report.isWithinBudget();
@@ -446,7 +479,7 @@ public final class AgentRuntime {
     private PreparedContext prepareContext(AgentSession session, ContextSummary summary,
                                            ConversationSummary dialogueSummary, boolean install) {
         session.refreshVerificationBasis();
-        var definitions = tools.values().stream().map(Tool::definition).toList();
+        var definitions = definitions(session);
         int remaining = maxModelCalls - session.modelCalls();
         var initial = contextAssembler.preview(session, definitions, remaining, summary, dialogueSummary);
         var report = model.inspectRequest(initial);
@@ -645,7 +678,9 @@ public final class AgentRuntime {
         return view.toString().length();
     }
 
-    private ToolResult executeTool(ToolCall call) {
+    private ToolResult executeTool(ToolCall call, AgentSession session) {
+        if (toolDiscovery != null && call.name().equals(dev.backendagent.selection.ToolDiscovery.NAME))
+            return toolDiscovery.search(session, call.arguments());
         Tool tool = tools.get(call.name());
         if (tool == null) {
             return new ToolResult(false, "Unknown tool: " + call.name());

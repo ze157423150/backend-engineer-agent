@@ -14,6 +14,29 @@ class ControllerTests(unittest.TestCase):
         c.write(self.bundle/'stages.json', ['first task', 'second task'])
         (self.bundle/'disable-verification-basis').touch()
 
+    def test_tool_selection_mode_is_preserved_across_turns_and_retry(self):
+        (self.bundle/'tool-selection-rule').write_text('rule')
+        (self.bundle/'model-call-limit.txt').write_text('20')
+        (self.bundle/'tool-search-ranker.txt').write_text('bm25')
+        def invoke(directory, resumed):
+            self.assertTrue((directory/'tool-selection-rule').exists())
+            self.assertEqual('20',(directory/'model-call-limit.txt').read_text())
+            self.assertEqual('bm25',(directory/'tool-search-ranker.txt').read_text())
+            turn = len(c.read(directory/'stages.json'))
+            first = directory.name == 'attempt-01'
+            return self.finish(directory, 'FAILED' if turn == 2 and first else 'COMPLETED')
+        report = c.run_suite(self.bundle,self.base/'selected-run',2,2,invoke)
+        self.assertEqual('rule',report['toolSelection'])
+        self.assertEqual(20,report['maxModelCallsPerAttempt'])
+        self.assertEqual('bm25',report['toolSearchRanker'])
+        self.assertEqual(2,report['acceptedTurns'])
+        self.assertEqual(1,report['retryAttempts'])
+
+    def test_default_copy_does_not_enable_selection(self):
+        directory = self.base/'plain-attempt'
+        c.copy_inputs(self.bundle,directory,1)
+        self.assertFalse((directory/'tool-selection-rule').exists())
+
     def finish(self, directory, status='COMPLETED', passed=True, tokens=10):
         tasks=c.read(directory/'stages.json'); turn=len(tasks)
         report=c.read(directory/'report.json') if (directory/'report.json').exists() else {'turns':[], 'sessionId':'id', 'externalApiCalls':0,'providerReportedTokens':0}

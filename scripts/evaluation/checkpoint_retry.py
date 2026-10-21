@@ -51,8 +51,9 @@ def copy_inputs(bundle, dest, turn):
     os.link(bundle / 'agent.jar', dest / 'agent.jar')
     shutil.copytree(bundle / 'classes', dest / 'classes')
     write(dest / 'stages.json', read(bundle / 'stages.json')[:turn])
-    if (bundle / 'disable-verification-basis').exists():
-        shutil.copy2(bundle / 'disable-verification-basis', dest / 'disable-verification-basis')
+    for name in ['disable-verification-basis', 'tool-selection-rule', 'model-call-limit.txt', 'tool-search-ranker.txt']:
+        if (bundle / name).exists():
+            shutil.copy2(bundle / name, dest / name)
 
 def prepare_attempt(bundle, dest, turn, accepted):
     copy_inputs(bundle, dest, turn)
@@ -132,8 +133,10 @@ def run_suite(bundle, root, turns, max_attempts, run_attempt, config_hash_check=
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     jar_hash = sha(bundle / 'agent.jar')
     report = {'status': 'RUNNING', 'startedAt': now(), 'plannedTurns': turns,
-              'maxAttemptsPerTurn': max_attempts, 'maxModelCallsPerAttempt': 50,
+              'maxAttemptsPerTurn': max_attempts, 'maxModelCallsPerAttempt': int((bundle/'model-call-limit.txt').read_text().strip()) if (bundle/'model-call-limit.txt').exists() else 50,
               'cumulativeTokenLimit': None, 'frozenJarSha256': jar_hash,
+              'toolSelection': 'rule' if (bundle / 'tool-selection-rule').exists() else 'all',
+              'toolSearchRanker': (bundle/'tool-search-ranker.txt').read_text().strip() if (bundle/'tool-search-ranker.txt').exists() else 'lexical',
               'method': 'Automatic bounded previous-checkpoint retries; no code/model/task changes or failure feedback',
               'acceptanceScope': 'Existing independent code contracts; narrative audit completeness is not automatically graded',
               'turns': []}

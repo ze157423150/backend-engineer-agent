@@ -24,14 +24,25 @@ public final class CheckpointRetryEvaluation {
     static volatile int activeModelCall; static ModelConfig provider; static HttpServer proxy; static ObjectNode report;
     static DockerSandboxExecutor executor;
     static boolean verificationBasisEnabled;
+    static boolean toolSelectionEnabled;
+    static String toolSearchRanker;
+    static int perTurnModelCallLimit;
     public static void main(String[] args)throws Exception {
         base=Path.of(args[0]).toAbsolutePath();
         verificationBasisEnabled=!Files.exists(base.resolve("disable-verification-basis"));
+        toolSelectionEnabled=Files.exists(base.resolve("tool-selection-rule"));
+        toolSearchRanker=Files.exists(base.resolve("tool-search-ranker.txt"))
+                ? Files.readString(base.resolve("tool-search-ranker.txt")).trim() : "lexical";
+        if (!Set.of("lexical","bm25").contains(toolSearchRanker)) throw new IllegalArgumentException("Invalid tool search ranker");
+        if (!toolSelectionEnabled && toolSearchRanker.equals("bm25")) throw new IllegalArgumentException("BM25 requires tool selection");
+        perTurnModelCallLimit=Files.exists(base.resolve("model-call-limit.txt"))
+                ? Integer.parseInt(Files.readString(base.resolve("model-call-limit.txt")).trim()) : 50;
+        if (perTurnModelCallLimit < 1 || perTurnModelCallLimit > 50) throw new IllegalArgumentException("Invalid evaluation call limit");
         boolean resume=args.length==3&&args[2].equals("--resume-completed");
         if(Files.exists(base.resolve("report.json"))&&!resume)throw new IllegalStateException("Never overwrite a previous run");
         report=resume?(ObjectNode)JSON.readTree(base.resolve("report.json").toFile()):JSON.createObjectNode().put("status","PREFLIGHT").put("startedAt",Instant.now().toString())
             .put("method","Fresh continuous production session; real tools and model; no injected history or external grading feedback")
-            .putNull("tokenLimit").putNull("externalCallLimit").putNull("productionTurnLimit").put("plannedTurns",JSON.readTree(base.resolve("stages.json").toFile()).size()).put("perTurnModelCallLimit",50).put("frozenJarSha256",sha(base.resolve("agent.jar")));
+            .putNull("tokenLimit").putNull("externalCallLimit").putNull("productionTurnLimit").put("plannedTurns",JSON.readTree(base.resolve("stages.json").toFile()).size()).put("perTurnModelCallLimit",perTurnModelCallLimit).put("frozenJarSha256",sha(base.resolve("agent.jar")));
         if(resume) {
             report.withArray("harnessInterruptions").addObject().put("reason","Automatic rollback to previous accepted boundary; unchanged task and model; failed attempt excluded from model context")
                 .put("recoveredAt",Instant.now().toString());
@@ -49,6 +60,8 @@ public final class CheckpointRetryEvaluation {
         }
         provider=AgentConfigLoader.load(Path.of(args[1]));
         report.put("verificationBasisEnabled",verificationBasisEnabled);
+        report.put("toolSelection",toolSelectionEnabled?"rule":"all");
+        report.put("toolSearchRanker",toolSelectionEnabled?toolSearchRanker:"not_enabled");
         report.put("model",provider.getModelName()).put("status","RUNNING"); save();
         startProxy();
         var local=new ModelConfig("evaluation-loopback",URI.create("http://127.0.0.1:"+proxy.getAddress().getPort()),provider.getModelName(),
@@ -85,6 +98,7 @@ public final class CheckpointRetryEvaluation {
                 public ModelResponse execute(ModelRequest r){
                     activeModelCall=session.modelCalls();
                     record("task-views.jsonl",JSON.createObjectNode().put("turn",stage).put("modelCall",session.modelCalls())
+                        .put("availableToolCount",r.availableTools().size()).putPOJO("availableTools",r.availableTools().stream().map(ToolDefinition::getName).toList())
                         .put("historicalEvidenceEntries",r.historicalEvidence().size()).put("projectionVersion",r.contextProjection().getPolicyVersion())
                         .put("indexCharacters",r.contextProjection().getRecoveryReferences().length())
                         .set("verification",JSON.valueToTree(r.verificationContext())));
@@ -143,7 +157,10 @@ public final class CheckpointRetryEvaluation {
                 var row=turns.addObject().put("turn",stage).put("status","RUNNING").put("startedAt",Instant.now().toString());
                 report.put("currentTurn",stage); save();
                 System.out.println("START turn="+stage+" time="+Instant.now());
-                var runtime=new AgentRuntime(observed,tools,callsBefore+50,new ContextBudget(ContextBudget.DEFAULT_MAX_HISTORY_CHARACTERS),System.out::println,verificationBasisEnabled);
+                var runtime=new AgentRuntime(observed,tools,callsBefore+perTurnModelCallLimit,new ContextBudget(ContextBudget.DEFAULT_MAX_HISTORY_CHARACTERS),System.out::println,verificationBasisEnabled);
+                if (toolSelectionEnabled) runtime.withToolSelection(new dev.backendagent.selection.RuleToolSelector(),8,
+                        toolSearchRanker.equals("bm25") ? new dev.backendagent.selection.Bm25ToolSearchRanker()
+                                : new dev.backendagent.selection.LexicalToolSearchRanker());
                 boolean hostFailed=false;
                 try {if(stage==1)runtime.run(session);else runtime.continueConversation(session,input);}
                 catch(Exception e){hostFailed=true;row.put("hostFailure",e.getClass().getSimpleName());if(e instanceof dev.backendagent.persistence.PersistenceException)e.printStackTrace(System.out);}
@@ -202,7 +219,9 @@ public final class CheckpointRetryEvaluation {
                 String prompt=node.path("messages").path(0).path("content").asText();
                 String kind=prompt.startsWith("精简本轮测试生成依据")?"VERIFICATION_COMPACTION":prompt.startsWith("维护本轮测试生成依据")?"VERIFICATION":node.has("response_format")?"SUMMARY":"TASK";
                 var metric=JSON.createObjectNode().put("call",id).put("turn",callTurn).put("modelCall",activeModelCall).put("kind",kind).put("httpStatus",response.statusCode())
-                    .put("elapsedMillis",(System.nanoTime()-start)/1000000).put("requestBytes",body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+                    .put("elapsedMillis",(System.nanoTime()-start)/1000000).put("requestBytes",body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
+                    .put("toolDefinitionCount",node.path("tools").size())
+                    .put("toolDefinitionBytes",JSON.writeValueAsBytes(node.path("tools")).length);
                 metric.set("usage",usage);record("api.jsonl",metric);save();
                 System.out.println("API call="+id+" turn="+callTurn+" kind="+kind+" status="+response.statusCode()+" tokens="+actual);
                 reply(exchange,response.statusCode(),content);

@@ -13,7 +13,7 @@ public final class AgentOptions {
                    [--config <properties-file>] [--max-model-calls <positive-integer>]
                    [--max-history-chars <positive-integer>] [--min-summary-input-chars <positive-integer>]
                    [--sandbox-image <local-image>] [--test-timeout-seconds <1-600>]
-                   [--data-dir <directory>] [--memory-from <uuid>]
+                   [--tool-selection <all|rule>] [--data-dir <directory>] [--memory-from <uuid>]
                    java -jar <jar> --resume-session <uuid> --workspace <directory>
                    [--max-model-calls <total-limit>] [--config <properties-file>] [--data-dir <directory>]
                    java -jar <jar> --resume-failed-session <uuid> --workspace <directory>
@@ -26,6 +26,7 @@ public final class AgentOptions {
                    java -jar <jar> --help
             """;
 
+    private boolean toolSelection;
     private boolean interactive;
     private java.util.UUID continueSession;
     private java.util.UUID resumeFailedSession;
@@ -85,6 +86,7 @@ public final class AgentOptions {
         java.util.UUID exportSession = null;
         Path outputWorkspace = null;
         boolean interactive = false;
+        boolean toolSelection = false;
         var seen = new HashSet<String>();
         for (int i = 0; i < args.length;) {
             String option = args[i];
@@ -98,6 +100,10 @@ public final class AgentOptions {
                 throw new IllegalArgumentException("Option value must not be blank or another option");
             }
             switch (option) {
+                case "--tool-selection" -> {
+                    if (!value.equals("rule") && !value.equals("all")) throw new IllegalArgumentException("--tool-selection accepts rule or all");
+                    toolSelection = value.equals("rule");
+                }
                 case "--resume-failed-session" -> {
                     try { resumeFailedSession = java.util.UUID.fromString(value); }
                     catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("--resume-failed-session must be a valid UUID"); }
@@ -213,12 +219,14 @@ public final class AgentOptions {
         }
         var options = new AgentOptions(workspace, task, configFile, maxModelCalls, maxHistoryCharacters, minimumSummaryInputCharacters, sandboxImage,
                 testTimeoutSeconds, dataDirectory, showSession, memoryFrom, resumeSession, exportSession, outputWorkspace);
+        options.toolSelection = toolSelection;
         options.interactive = interactive;
         options.continueSession = continueSession; options.message = message;
         options.resumeFailedSession = resumeFailedSession; options.retryIncompleteTool = retryIncompleteTool;
         return options;
     }
 
+    public boolean isToolSelectionEnabled() { return toolSelection; }
     public boolean isInteractive() { return interactive; }
     public java.util.UUID getContinueSession() { return continueSession; }
     public java.util.UUID getResumeFailedSession() { return resumeFailedSession; }

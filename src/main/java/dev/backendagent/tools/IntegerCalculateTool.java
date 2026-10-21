@@ -15,7 +15,7 @@ public final class IntegerCalculateTool implements Tool {
         if(!args.keySet().equals(java.util.Set.of("expression")))return new ToolResult(false,"必须仅提供expression");
         String expression=args.get("expression");
         if(expression==null||expression.isBlank()||expression.length()>512)return new ToolResult(false,"表达式必须非空，最多512字符");
-        try{return new ToolResult(true,"expression="+expression+"\nvalue="+calculate(expression)+"\n整数除法向零截断；计算正确不代表业务公式正确。");}
+        try{return new ToolResult(true,"value="+calculate(expression));}
         catch(IllegalArgumentException|ArithmeticException invalid){return new ToolResult(false,"仅支持有界十进制整数及+-*/%括号；检查语法、除零或长度限制，不执行代码");}
     }
     public static BigInteger calculate(String expression) {

@@ -24,11 +24,24 @@ def expected(lines):
             int(valid>=3 and (c4+c5-counts[429])*10000>=2000*valid)]
 
 
-def prepare(fixtures, destination, jar, java_source, javac):
+def prepare(fixtures, destination, jar, java_source, javac, tool_selection="all", turns=None, max_model_calls=50, tool_search_ranker="lexical"):
+    if not 1 <= max_model_calls <= 50:
+        raise ValueError("Invalid model call limit")
+    if tool_selection not in {"all", "rule"}:
+        raise ValueError("Unknown tool selection mode")
+    if tool_search_ranker not in {"lexical", "bm25"} or tool_search_ranker == "bm25" and tool_selection != "rule":
+        raise ValueError("BM25 requires rule selection; unknown tool search ranker")
     fixtures,destination,jar=Path(fixtures).resolve(),Path(destination).resolve(),Path(jar).resolve()
     destination.mkdir(parents=True,mode=0o700,exist_ok=False)
+    if tool_selection == 'rule':
+        (destination/'tool-selection-rule').write_text('Enable production rule selector and tool discovery.\n')
+    (destination/'tool-search-ranker.txt').write_text(tool_search_ranker+'\n')
     shutil.copytree(fixtures/'seed',destination/'seed')
-    shutil.copy2(fixtures/'stages.json',destination/'stages.json')
+    all_tasks=json.loads((fixtures/'stages.json').read_text())
+    if turns is not None and not 1 <= turns <= len(all_tasks):
+        raise ValueError('Invalid turn count')
+    (destination/'stages.json').write_text(json.dumps(all_tasks[:turns],ensure_ascii=False,indent=2)+'\n')
+    (destination/'model-call-limit.txt').write_text(str(max_model_calls)+'\n')
     shutil.copy2(jar,destination/'agent.jar')
     (destination/'disable-verification-basis').write_text('Same basis-disabled protocol as the recorded 64-round experiment.\n')
     graders=destination/'private-tests';graders.mkdir()
@@ -52,9 +65,13 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--jar',type=Path,required=True)
     parser.add_argument('--javac',type=Path,required=True)
+    parser.add_argument('--tool-selection',choices=['all','rule'],default='all')
+    parser.add_argument('--tool-search-ranker',choices=['lexical','bm25'],default='lexical')
+    parser.add_argument('--turns',type=int)
+    parser.add_argument('--max-model-calls-per-turn',type=int,default=50)
     args=parser.parse_args();root=Path(__file__).resolve().parents[2]
     result=prepare(root/'fixtures/long-context',args.output,args.jar,
-        root/'src/test/java/dev/backendagent/model/CheckpointRetryEvaluation.java',args.javac)
+        root/'src/test/java/dev/backendagent/model/CheckpointRetryEvaluation.java',args.javac,args.tool_selection,args.turns,args.max_model_calls_per_turn,args.tool_search_ranker)
     print('Prepared evaluation bundle:',result)
 
 if __name__=='__main__':main()
