@@ -19,7 +19,7 @@
 | 会话管理 | 列表、切换、新建与确认删除；历史、副本、摘要、调用额度及同步基准按 UUID 隔离 |
 | 模型失败处理 | 保存安全诊断，任务请求最多两次额外重试，计入累计调用预算 |
 
-最新版本：[v2.1.0](https://github.com/ze157423150/backend-engineer-agent/releases/tag/v2.1.0) · [更新记录](CHANGELOG.md)
+最新版本：[v2.2.0](https://github.com/ze157423150/backend-engineer-agent/releases/tag/v2.2.0) · [更新记录](CHANGELOG.md)
 
 ## 快速开始
 
@@ -34,8 +34,8 @@ cp agent-local.properties.example agent-local.properties
 配置文件已存在时跳过最后一步。在编辑器中填写 `agent-local.properties` 的 `model.api-key`，不要加引号。本地配置已被 Git 忽略；没有密钥时可以先查看帮助或运行普通回归测试。
 
 ```bash
-java -jar target/backend-engineer-agent-2.1.0.jar --help
-java -jar target/backend-engineer-agent-2.1.0.jar \
+java -jar target/backend-engineer-agent-2.2.0.jar --help
+java -jar target/backend-engineer-agent-2.2.0.jar \
   --interactive --workspace examples/test-repair \
   --config agent-local.properties --max-model-calls 60
 ```
@@ -45,7 +45,7 @@ java -jar target/backend-engineer-agent-2.1.0.jar \
 也保留单次任务入口：
 
 ```bash
-java -jar target/backend-engineer-agent-2.1.0.jar \
+java -jar target/backend-engineer-agent-2.2.0.jar \
   --workspace examples/test-repair \
   --task "先运行测试定位失败，修复Calculator.add实现，不修改现有测试预期，再运行测试并解释结果" \
   --config agent-local.properties \
@@ -99,7 +99,7 @@ flowchart TD
 
 ```bash
 SESSION_ID='替换为会话UUID'
-java -jar target/backend-engineer-agent-2.1.0.jar \
+java -jar target/backend-engineer-agent-2.2.0.jar \
   --workspace examples/test-repair --continue-session "$SESSION_ID" \
   --message "补充负数和零值测试，保留已有测试，然后运行测试" \
   --config agent-local.properties --max-model-calls 30
@@ -116,6 +116,8 @@ java -jar target/backend-engineer-agent-2.1.0.jar \
 ## 测试结果
 
 常规回归和 Docker 验证结果见[测试结果](docs/VALIDATION.md)。自动恢复评测执行器另有 14 项离线测试通过。
+
+**v2.2.0 全量工具配置完成6轮真实模型验证**：全部首次通过独立验收，共61次 API 请求、817,433 Token；相较本组旧全量版本前6轮记录，调用减少22.78%、总 Token 减少20.01%。[结果与统计口径](docs/VALIDATION.md)。
 
 **2026-10-18：64轮长上下文测试自主运行通过**：系统结合上下文治理、工具执行与自动检查点恢复，完成全部 64 轮独立代码验收，全程无需人工修改代码或注入修复建议。共 432 次 API 请求、6,359,507 Token，统计包含自动恢复产生的消耗。验收覆盖代码任务，不自动评价所有自然语言回答的准确性。[评测结果与复现入口](docs/LONG_CONTEXT_EVALUATION.md)。
 

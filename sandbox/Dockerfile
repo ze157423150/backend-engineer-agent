@@ -4,7 +4,7 @@ COPY pom.xml .
 COPY src ./src
 # Trusted preparation downloads dependencies; actual agent tests run offline without a host Maven cache.
 RUN mvn -B -ntp dependency:go-offline clean verify \
-    && cp target/backend-engineer-agent-2.1.0.jar /opt/agent-tools.jar \
+    && cp target/backend-engineer-agent-2.2.0.jar /opt/agent-tools.jar \
     && chmod a+r /opt/agent-tools.jar \
     && mv /root/.m2/repository /opt/maven-repository \
     && chmod -R a+rX /opt/maven-repository \

@@ -60,7 +60,7 @@
 ```bash
 python3 scripts/evaluation/prepare_long_context.py \
   --output reports/long-context/bundle \
-  --jar target/backend-engineer-agent-2.1.0.jar \
+  --jar target/backend-engineer-agent-2.2.0.jar \
   --javac "$JAVA_HOME/bin/javac"
 ```
 
