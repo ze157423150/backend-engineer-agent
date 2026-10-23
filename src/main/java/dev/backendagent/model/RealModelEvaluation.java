@@ -222,14 +222,14 @@ public final class RealModelEvaluation {
                 if (!full) { return request; }
                 var original = session.history().stream().map(exchange -> session.originalObservation(exchange.call().id())).toList();
                 return new ModelRequest(request.objective(), StaleObservationFilter.filter(original), request.availableTools(),
-                        request.remainingModelCalls(), 0, 0, request.workingMemory(), null, null, Set.of(), request.workspaceState(), request.historicalEvidence()).withNoProgressReport(request.noProgressReport()).withVerificationContext(request.verificationContext());
+                        request.remainingModelCalls(), 0, 0, request.workingMemory(), null, null, Set.of(), request.workspaceState(), request.historicalEvidence()).withNoProgressReport(request.noProgressReport()).withVerificationContext(request.verificationContext()).withTurnWrites(request.turnWrites());
             }
             public RequestBudgetReport inspectRequest(ModelRequest request) { return client.inspectRequest(actual(request)); }
             public ModelResponse execute(ModelRequest request) {
                 if (!full && paired != null) {
                     var originals = session.history().stream().map(exchange -> session.originalObservation(exchange.call().id())).toList();
                     var baseline = new ModelRequest(request.objective(), StaleObservationFilter.filter(originals), request.availableTools(),
-                            request.remainingModelCalls(), 0, 0, request.workingMemory(), null, null, Set.of(), request.workspaceState(), request.historicalEvidence()).withNoProgressReport(request.noProgressReport()).withVerificationContext(request.verificationContext());
+                            request.remainingModelCalls(), 0, 0, request.workingMemory(), null, null, Set.of(), request.workspaceState(), request.historicalEvidence()).withNoProgressReport(request.noProgressReport()).withVerificationContext(request.verificationContext()).withTurnWrites(request.turnWrites());
                     var f = client.inspectRequest(baseline);
                     var l = client.inspectRequest(request);
                     paired.add(JSON.createObjectNode().put("round", paired.size() + 1).put("historySize", originals.size())

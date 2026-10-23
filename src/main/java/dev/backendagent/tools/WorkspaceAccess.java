@@ -23,6 +23,12 @@ public interface WorkspaceAccess {
     }
     ToolResult createFile(String path, String content);
     ToolResult diff(String path);
+    default ToolResult diff(String path, String scope) {
+        return "session".equals(scope) ? diff(path) : new ToolResult(false,"本工作区不支持本轮差异");
+    }
+    default void beginTurn(int turnId) { }
+    default TurnDiffState turnDiffState() { return TurnDiffState.unavailable(0); }
+    default void restoreTurnDiff(TurnDiffState state) throws IOException { }
     Map<String, String> checkpointHashes() throws IOException;
     Map<String, String> originalContents();
     Set<String> createdFilePaths();

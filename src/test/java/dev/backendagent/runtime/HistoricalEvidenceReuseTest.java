@@ -25,7 +25,7 @@ class HistoricalEvidenceReuseTest {
         var legacy=dev.backendagent.history.HistoricalEvidence.excerpt(raw,2,ObservationEvidence.Validity.CURRENT,1,1);
         assertEquals("1: literal value\n",legacy.rawSourceExcerpt(raw));
     }
-    @Test void retrievedCurrentRangeAuthorizesPatchThenExpiresAndClearsAcrossPersistedTurns() throws Exception {
+    @Test void retrievedRangeLosesWriteAuthorityButRemainsHistoricalUntilNextTurn() throws Exception {
         Path repo=Files.createDirectory(root.resolve("repo"));
         Files.writeString(repo.resolve("Main.java"),"class Main {\r\n    int value = 1;\r\n}\r\n");
         var workspace=new Workspace(repo,root.resolve("local.properties"));
@@ -49,7 +49,8 @@ class HistoricalEvidenceReuseTest {
                     return ModelResponse.callTool(new ToolCall("patch","apply_patch",Map.of("path","Main.java","old_text","    int value = 1;","new_text","    int value = 2;")));
                 }
                 assertTrue(session.history().getLast().result().successful());
-                assertTrue(request.historicalEvidence().isEmpty());
+                assertEquals(ObservationEvidence.Validity.STALE,request.historicalEvidence().getFirst().getCurrentValidity());
+                assertFalse(session.hasCurrentPatchSource("Main.java","    int value = 1;",workspace));
                 return ModelResponse.finish("done");
             },tools,50).run(session);
             assertEquals(AgentSession.Status.COMPLETED,session.status(),session.failure()==null?"":session.failure().toString());
@@ -64,7 +65,8 @@ class HistoricalEvidenceReuseTest {
                     assertTrue(request.historicalEvidence().isEmpty());
                     return ModelResponse.callTool(new ToolCall("retrieve-again","read_observation",Map.of("call_id","read","start_line","3","end_line","3")));
                 }
-                assertTrue(request.historicalEvidence().isEmpty());
+                assertEquals(ObservationEvidence.Validity.STALE,request.historicalEvidence().getFirst().getCurrentValidity());
+                assertTrue(request.historicalEvidence().getFirst().getContent().contains("value = 1"));
                 assertFalse(session.hasCurrentPatchSource("Main.java","value = 1",workspace));
                 return ModelResponse.finish("reviewed");
             },List.of(retrieval),60).continueConversation(session,"review history");
@@ -72,7 +74,7 @@ class HistoricalEvidenceReuseTest {
         }
         try(var store=new FileSessionStore(root.resolve("sessions"))) {
             var session=store.openCompleted(id,workspace,65);
-            assertTrue(session.historicalEvidence().isEmpty());
+            assertEquals(1,session.historicalEvidence().size());
             new AgentRuntime(request->{assertTrue(request.historicalEvidence().isEmpty());return ModelResponse.finish("new turn");},List.of(),65)
                     .continueConversation(session,"next task");
         }
@@ -102,19 +104,20 @@ class HistoricalEvidenceReuseTest {
             assertTrue(store.openCompleted(id,workspace,15).historicalEvidence().isEmpty());
         }
     }
-    @Test void externalFileChangeInvalidatesRetainedEvidenceOnNextProjection() throws Exception {
+    @Test void externalChangeMarksRetainedEvidenceStaleWithoutDeletingHistoricalContent() throws Exception {
         var workspace=new Workspace(root,root.resolve("local.properties"));Files.writeString(root.resolve("Main.java"),"old\n");
         var session=new AgentSession("inspect");var step=new AtomicInteger();
         new AgentRuntime(request->{
             int n=step.getAndIncrement();
             if(n==0)return ModelResponse.callTool(new ToolCall("read","read_file",Map.of("path","Main.java","start_line","1","end_line","1")));
             if(n<=12)return ModelResponse.callTool(new ToolCall("list-"+n,"list_files",Map.of("path",".")));
-            if(n==13)return ModelResponse.callTool(new ToolCall("retrieve","read_observation",Map.of("call_id","read","start_line","1","end_line","1")));
+            if(n==13)return ModelResponse.callTool(new ToolCall("retrieve","read_observation",Map.of("call_id","read","start_line","1","end_line","2")));
             assertEquals(ObservationEvidence.Validity.CURRENT,request.historicalEvidence().getFirst().getCurrentValidity());
             try{Files.writeString(root.resolve("Main.java"),"external\n");}catch(Exception e){throw new RuntimeException(e);}
             session.refreshVerificationBasis();
-            assertTrue(session.historicalEvidenceForContext().isEmpty());
-            assertTrue(session.historicalEvidence().isEmpty());
+            assertEquals(ObservationEvidence.Validity.STALE,session.historicalEvidenceForContext().getFirst().getCurrentValidity());
+            assertEquals(1,session.historicalEvidence().size());
+            assertTrue(session.historicalEvidenceForContext().getFirst().getContent().contains("old"));
             assertFalse(session.hasCurrentPatchSource("Main.java","old",workspace));
             return ModelResponse.finish("done");
         },List.of(new ReadFileTool(workspace),new ListFilesTool(workspace),new ReadObservationTool(session,workspace)),20).run(session);

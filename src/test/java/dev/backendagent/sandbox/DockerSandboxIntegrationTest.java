@@ -12,6 +12,22 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Opt-in real container verification after building the local image. Never invokes a model API. */
 @EnabledIfSystemProperty(named = "docker.integration", matches = "true")
 class DockerSandboxIntegrationTest {
+    @Test void turnDiffUsesPreviousTurnFileAsBaselineAcrossRealContainers() throws Exception {
+        Path source=Files.createDirectory(root.resolve("turn-source"));
+        var directory=Files.createDirectory(root.resolve("turn-session"));
+        var w=DockerWorkspace.create(new Workspace(source,source.resolve("private.properties")),directory,new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);
+        w.beginTurn(1);assertTrue(w.createFile("New.java","class New { int n=1; }\n").successful());
+        w.beginTurn(2);assertTrue(w.applyPatch("New.java","n=1","n=2").successful());
+        var reopened=DockerWorkspace.open(source,directory,new LocalProcessRunner(),DockerSandboxExecutor.DEFAULT_IMAGE);
+        reopened.restoreChanges(w.originalContents(),w.createdFilePaths());reopened.restoreTurnDiff(w.turnDiffState());reopened.beginTurn(2);
+        String diff=new dev.backendagent.tools.WorkspaceDiffTool(reopened).execute(java.util.Map.of("path","New.java")).content();
+        assertTrue(diff.contains("scope=turn, turn=2"));assertTrue(diff.contains("-class New { int n=1; }"));
+        assertFalse(diff.contains("/dev/null"));assertTrue(reopened.diff("New.java","session").content().contains("/dev/null"));
+        assertTrue(reopened.applyPatch("New.java","n=2","n=1").successful());
+        assertTrue(reopened.diff("New.java","turn").content().contains("没有净差异"));
+        assertFalse(Files.exists(source.resolve("New.java")));
+    }
+
     @Test void separateCommentAndAssertionPatchesReuseOriginalReadAcrossContainerCalls() throws Exception {
         var source=Files.createDirectory(root.resolve("source"));
         String original="// count old\nclass Example { int expected = 4; }\n";

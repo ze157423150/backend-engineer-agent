@@ -63,6 +63,23 @@ class DockerWorkspaceTest {
     }
 
     @Test
+    void turnDiffStateCrossesDisposableWorkersAndRestoresWithoutResettingSessionBaseline() throws Exception {
+        var source=source();var directory=sessionDirectory();var runner=new FakeDocker();
+        var w=DockerWorkspace.create(new Workspace(source,source.resolve("agent-local.properties")),directory,runner,DockerSandboxExecutor.DEFAULT_IMAGE);
+        w.beginTurn(1);assertTrue(w.createFile("New.java","class New { int n=1; }\n").successful());
+        w.beginTurn(2);assertTrue(w.applyPatch("New.java","n=1","n=2").successful());
+        var state=w.turnDiffState();var originals=w.originalContents();var created=w.createdFilePaths();
+        var restored=DockerWorkspace.open(source,directory,runner,DockerSandboxExecutor.DEFAULT_IMAGE);
+        restored.restoreChanges(originals,created);restored.restoreTurnDiff(state);restored.beginTurn(2);
+        String diff=restored.diff("New.java","turn").content();
+        assertTrue(diff.contains("n=1"));assertTrue(diff.contains("n=2"));assertFalse(diff.contains("/dev/null"));
+        assertTrue(restored.diff("New.java","session").content().contains("/dev/null"));
+        assertFalse(restored.diff("../private.java","turn").successful());
+        restored.beginTurn(3);assertTrue(restored.diff("New.java","turn").content().contains("本轮未成功修改"));
+        assertTrue(restored.diff("New.java","session").content().contains("n=2"));
+    }
+
+    @Test
     void dockerPermissionFailureIsIdentifiedInsteadOfHiddenByCleanupError() throws Exception {
         var source = source();
         CommandRunner runner = (command, timeout) -> new CommandResult(1, false,

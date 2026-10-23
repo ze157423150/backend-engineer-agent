@@ -80,7 +80,9 @@ public final class ContextAssembler {
                     new ConversationTurn(turn.getTurnId(), turn.getUserMessage(),
                             turn.getStatus() == AgentSession.Status.COMPLETED ? AgentSession.Status.COMPLETED : AgentSession.Status.RUNNING,
                             turn.getAnswer(), turn.getStartHistoryIndex(), turn.getEndHistoryIndex())).toList(),visibleDialogue,session.turns().size())
-                .withNoProgressReport(session.noProgressReport()).withVerificationContext(verification);
+                .withNoProgressReport(session.noProgressReport()).withVerificationContext(verification)
+                .withTurnWrites(TurnWriteSummary.fromHistory(session.history().subList(
+                        session.turns().getLast().getStartHistoryIndex(), session.history().size())));
         return request.withVerificationContext(session.verificationContext(request));
     }
 

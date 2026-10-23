@@ -146,6 +146,8 @@ class ToolDiscoveryTest {
         assertTrue(names(hidden(), session).contains("search_code"));
         assertFalse(names(hidden(), session).contains("run_tests"));
         assertTrue(discovery.definitions(session).getLast().getDescription().contains("整个批次未执行"));
+        assertTrue(discovery.definitions(session).getLast().getDescription().contains("search_code"));
+        assertTrue(discovery.definitions(session).getLast().getDescription().contains("现已提供完整参数定义"));
         session.transitionTo(AgentSession.Status.RUNNING); session.finish("完成");
         session.transitionTo(AgentSession.Status.COMPLETED); session.continueWith("下一轮");
         assertFalse(names(discovery, session).contains("search_code"));
@@ -229,5 +231,88 @@ class ToolDiscoveryTest {
         new AgentRuntime(model,List.of(tool),4).withToolSelection((t,h,c,k)->List.of(),0).run(session);
         assertEquals(AgentSession.Status.COMPLETED,session.status());
         assertEquals(1,executions.get()); assertEquals(2,session.history().size());
+    }
+
+    @Test void catalogKeepsCoreAfterCalculationAndDirectoryListingWithoutTaskKeywordRules() {
+        var catalog = List.of("list_files", "read_file", "search_code", "apply_patch", "run_tests",
+                "integer_calculate", "search_history", "create_file").stream()
+                .map(n -> new ToolDefinition(n, "能力 " + n, Map.<String,String>of())).toList();
+        var discovery = new ToolDiscovery(catalog);
+        var session = new AgentSession("改代码并回归；历史日志不用改");
+        var initial = names(discovery, session);
+        assertEquals(List.of("list_files", "read_file", "search_code", "apply_patch", "run_tests", "search_tools"), initial);
+        String directory = discovery.definitions(session).getLast().getDescription();
+        assertTrue(directory.contains("create_file: 创建不存在的新文件"));
+        assertTrue(directory.contains("integer_calculate:"));
+        assertFalse(directory.contains("expression"));
+        assertFalse(directory.contains("apply_patch:"));
+        session.remember(new ToolExchange(new ToolCall("calc", "integer_calculate", Map.of()), new ToolResult(true, "rate_bp=20")));
+        session.remember(new ToolExchange(new ToolCall("list", "list_files", Map.of()), new ToolResult(true, "src/")));
+        assertTrue(names(discovery, session).containsAll(initial));
+        assertTrue(names(discovery, session).contains("integer_calculate"));
+    }
+
+    @Test void successfulDiscoveriesDoNotTriggerFullFallbackAndResetOnNewTurn() {
+        var catalog = List.of("create_file", "integer_calculate", "workspace_diff", "read_turn").stream()
+                .map(n -> new ToolDefinition(n, "optional " + n, Map.<String,String>of())).toList();
+        var discovery = new ToolDiscovery(catalog);
+        var session = new AgentSession("执行任务");
+        for (String name : List.of("create_file", "integer_calculate", "workspace_diff")) remember(session, discovery, name);
+        assertFalse(names(discovery, session).contains("read_turn"));
+        assertFalse(discovery.definitions(session).getLast().getDescription().contains("create_file:"));
+        assertTrue(discovery.definitions(session).getLast().getDescription().contains("read_turn:"));
+        var reopened = new ToolDiscovery(catalog, new CoreToolSelector(), 8, (q,c,p) -> { throw new AssertionError("Must restore saved names, not rerank"); });
+        assertEquals(names(discovery, session), names(reopened, session));
+        session.transitionTo(AgentSession.Status.RUNNING); session.finish("完成");
+        session.transitionTo(AgentSession.Status.COMPLETED); session.continueWith("新任务");
+        assertEquals(List.of("search_tools"), names(discovery, session));
+        assertEquals(List.of("search_tools"), names(discovery, new AgentSession("其他会话")));
+    }
+
+    @Test void exactDirectoryNameLoadsOnlyThatDefinitionWithoutFuzzySearch() {
+        var discovery = new ToolDiscovery(CATALOG, new CoreToolSelector(), 8,
+                (q,c,p) -> { throw new AssertionError("Exact name must bypass ranking"); });
+        var session = new AgentSession("查看改动");
+        remember(session, discovery, "workspace_diff");
+        assertTrue(names(discovery, session).contains("workspace_diff"));
+        assertEquals(5, names(discovery, session).size());
+    }
+
+    @Test void catalogRuntimeLoadsBeforeExecutingOptionalTool() {
+        var step = new AtomicInteger(); var executions = new AtomicInteger();
+        Tool calculator = new IntegerCalculateTool();
+        Tool observed = new Tool() {
+            public String name() { return calculator.name(); }
+            public ToolDefinition definition() { return calculator.definition(); }
+            public ToolResult execute(Map<String,String> args) { executions.incrementAndGet(); return calculator.execute(args); }
+        };
+        ModelClient model = request -> switch (step.getAndIncrement()) {
+            case 0 -> {
+                assertEquals(List.of("search_tools"), request.availableTools().stream().map(ToolDefinition::getName).toList());
+                assertTrue(request.availableTools().getFirst().getDescription().contains("integer_calculate:"));
+                yield ModelResponse.callTool(new ToolCall("load", "search_tools", Map.of("query", "integer_calculate")));
+            }
+            case 1 -> {
+                assertEquals(0, executions.get());
+                var definition = request.availableTools().stream().filter(t -> t.getName().equals("integer_calculate")).findFirst().orElseThrow();
+                assertTrue(definition.getRequiredParameters().contains("result_name"));
+                yield ModelResponse.callTool(new ToolCall("calc", "integer_calculate", Map.of("expression", "2*10000/10000", "result_name", "error_rate_bp")));
+            }
+            default -> {
+                assertEquals("error_rate_bp=2", request.history().getLast().result().content());
+                yield ModelResponse.finish("完成核算");
+            }
+        };
+        var session = new AgentSession("核算错误率");
+        new AgentRuntime(model, List.of(observed), 4).withToolSelection("catalog").run(session);
+        assertEquals(AgentSession.Status.COMPLETED, session.status());
+        assertEquals(1, executions.get());
+    }
+
+    @Test void cliCatalogModeIsDistinctFromLegacyRuleMode() {
+        var options = AgentOptions.parse(new String[]{"--workspace", "repo", "--task", "x", "--tool-selection", "catalog"});
+        assertEquals("catalog", options.getToolSelectionMode());
+        assertTrue(options.isToolSelectionEnabled());
+        assertEquals("rule", AgentOptions.parse(new String[]{"--workspace", "repo", "--task", "x", "--tool-selection", "rule"}).getToolSelectionMode());
     }
 }

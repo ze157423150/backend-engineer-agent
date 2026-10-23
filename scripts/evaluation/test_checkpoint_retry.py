@@ -91,9 +91,59 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual('RETRY_LIMIT_REACHED',result['stopReason']);self.assertEqual(3,result['totalApiCalls'])
         self.assertEqual(0,result['acceptedTurns'])
 
-    def test_completed_but_failed_independent_acceptance_is_not_retried(self):
+    def test_completed_but_failed_independent_acceptance_retries_with_same_bound(self):
         result=c.run_suite(self.bundle,self.base/'run',1,3,lambda d,resumed:self.finish(d,passed=False))
-        self.assertEqual('INDEPENDENT_ACCEPTANCE_FAILURE',result['stopReason']);self.assertEqual(1,result['totalApiCalls'])
+        self.assertEqual('RETRY_LIMIT_REACHED',result['stopReason'])
+        self.assertEqual(3,result['totalApiCalls'])
+        self.assertEqual(0,result['acceptedTurns'])
+        self.assertTrue(all(a['outcome']=='INDEPENDENT_ACCEPTANCE_FAILURE'
+                            for a in result['turns'][0]['attempts']))
+
+    def test_acceptance_retry_discards_failed_completed_workspace_and_retains_cost(self):
+        seen=[]
+        def invoke(d,resumed):
+            turn=len(c.read(d/'stages.json'));attempt=int(d.name.split('-')[1])
+            seen.append((turn,attempt))
+            if turn==1:return self.finish(d,tokens=10)
+            self.assertTrue(resumed)
+            self.assertEqual('original',(d/'sessions/id/workspace/Main.java').read_text())
+            self.assertEqual('preserved history',(d/'sessions/id/events.jsonl').read_text())
+            self.assertEqual(1,len(c.read(d/'report.json')['turns']))
+            if attempt==1:
+                result=self.finish(d,passed=False,tokens=30)
+                (d/'sessions/id/workspace/Main.java').write_text('completed but incorrect output')
+                return result
+            return self.finish(d,tokens=20)
+        result=c.run_suite(self.bundle,self.base/'run',2,3,invoke)
+        self.assertEqual([(1,1),(2,1),(2,2)],seen)
+        self.assertEqual('ALL_TURNS_ACCEPTED_WITH_RETRY_POLICY',result['status'])
+        self.assertEqual(2,result['acceptedTurns'])
+        self.assertEqual(60,result['totalTokens'])
+        self.assertEqual(30,result['failedAttemptTokens'])
+        self.assertEqual('INDEPENDENT_ACCEPTANCE_FAILURE',result['turns'][1]['attempts'][0]['outcome'])
+        self.assertEqual('completed but incorrect output',
+            (self.base/'run/turn-02/attempt-01/sessions/id/workspace/Main.java').read_text())
+
+    def test_missing_acceptance_result_stops_without_retry(self):
+        def invoke(d,resumed):
+            self.finish(d)
+            report=c.read(d/'report.json')
+            report['turns'][-1].pop('independentTestsPassed')
+            c.write(d/'report.json',report)
+            return 0
+        result=c.run_suite(self.bundle,self.base/'run',1,3,invoke)
+        self.assertEqual('HARNESS_FAILURE',result['stopReason'])
+        self.assertEqual(1,result['totalApiCalls'])
+
+    def test_first_turn_acceptance_retry_uses_seed_instead_of_failed_workspace(self):
+        def invoke(d,resumed):
+            self.assertFalse(resumed)
+            self.assertFalse((d/'sessions').exists())
+            self.assertEqual('original',(d/'seed/Main.java').read_text())
+            return self.finish(d,passed=d.name!='attempt-01')
+        result=c.run_suite(self.bundle,self.base/'run',1,3,invoke)
+        self.assertEqual(1,result['acceptedTurns'])
+        self.assertEqual(1,result['retryAttempts'])
 
     def test_corrupt_accepted_boundary_stops_before_next_model_call(self):
         def invoke(d,resumed):

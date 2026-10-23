@@ -37,6 +37,7 @@ public final class SessionCheckpoint {
     private final Map<String, String> workspaceHashes;
     private final Map<String, String> originalContents;
     private final Set<String> createdFiles;
+    private final dev.backendagent.tools.TurnDiffState turnDiff;
 
     public SessionCheckpoint(int schemaVersion, UUID sessionId, String objective,
             AgentSession.Status status, int modelCalls, long lastEventSequence,
@@ -123,6 +124,29 @@ public final class SessionCheckpoint {
                 contextSummary,workspaceState,historicalEvidence,turns,conversationSummary,failure,pendingToolBatch,null);
     }
 
+    public SessionCheckpoint(int schemaVersion,
+            UUID sessionId, String objective,
+            AgentSession.Status status, int modelCalls,
+            long lastEventSequence,
+            List<ToolExchange> history,
+            List<MemoryFact> workingMemory,
+            Set<String> staleEvidenceIds,
+            String workspacePath,
+            Map<String, String> workspaceHashes,
+            Map<String, String> originalContents,
+            Set<String> createdFiles,
+            ContextProjection contextProjection,
+            ContextSummary contextSummary,
+            WorkspaceState workspaceState,
+            List<dev.backendagent.history.HistoricalEvidence> historicalEvidence,
+            List<dev.backendagent.runtime.ConversationTurn> turns,
+            dev.backendagent.runtime.ConversationSummary conversationSummary,
+            dev.backendagent.runtime.SessionFailure failure,
+            dev.backendagent.runtime.PendingToolBatch pendingToolBatch,
+            dev.backendagent.verification.VerificationLedger verificationLedger) {
+        this(schemaVersion,sessionId,objective,status,modelCalls,lastEventSequence,history,workingMemory,staleEvidenceIds,workspacePath,workspaceHashes,originalContents,createdFiles,contextProjection,contextSummary,workspaceState,historicalEvidence,turns,conversationSummary,failure,pendingToolBatch,verificationLedger,null);
+    }
+
     @JsonCreator
     public SessionCheckpoint(@JsonProperty("schemaVersion") int schemaVersion,
             @JsonProperty("sessionId") UUID sessionId, @JsonProperty("objective") String objective,
@@ -143,7 +167,8 @@ public final class SessionCheckpoint {
             @JsonProperty("conversationSummary") dev.backendagent.runtime.ConversationSummary conversationSummary,
             @JsonProperty("failure") dev.backendagent.runtime.SessionFailure failure,
             @JsonProperty("pendingToolBatch") dev.backendagent.runtime.PendingToolBatch pendingToolBatch,
-            @JsonProperty("verificationLedger") dev.backendagent.verification.VerificationLedger verificationLedger) {
+            @JsonProperty("verificationLedger") dev.backendagent.verification.VerificationLedger verificationLedger,
+            @JsonProperty("turnDiff") dev.backendagent.tools.TurnDiffState turnDiff) {
         if ((schemaVersion != 1 && schemaVersion != 2 && schemaVersion != 3) || sessionId == null || objective == null || objective.isBlank()
                 || status == null || modelCalls < 0 || lastEventSequence < 0 || workspacePath == null) {
             throw new IllegalArgumentException("Invalid checkpoint metadata");
@@ -170,6 +195,8 @@ public final class SessionCheckpoint {
         this.workspaceHashes = Map.copyOf(workspaceHashes);
         this.originalContents = Map.copyOf(originalContents);
         this.createdFiles = Set.copyOf(createdFiles);
+        this.turnDiff = turnDiff == null ? dev.backendagent.tools.TurnDiffState.unavailable(this.turns.isEmpty()?1:this.turns.size()) : turnDiff;
+        if (this.turnDiff.getTurnId()>Math.max(1,this.turns.size())) throw new IllegalArgumentException("Turn diff boundary exceeds session turns");
     }
 
     public dev.backendagent.verification.VerificationLedger getVerificationLedger() { return verificationLedger; }
@@ -194,4 +221,5 @@ public final class SessionCheckpoint {
     public Map<String, String> getWorkspaceHashes() { return workspaceHashes; }
     public Map<String, String> getOriginalContents() { return originalContents; }
     public Set<String> getCreatedFiles() { return createdFiles; }
+    public dev.backendagent.tools.TurnDiffState getTurnDiff() {return turnDiff;}
 }

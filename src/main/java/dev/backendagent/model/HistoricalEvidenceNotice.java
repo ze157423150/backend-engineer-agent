@@ -39,7 +39,7 @@ final class HistoricalEvidenceNotice {
         reference.set("currentHistoricalRetrievals", currentRetrievals(json, evidence));
         reference.put("retrievalNotice", "以下来源的原文片段已在本次历史证据区，按sourceCallId及实际行范围查阅。"
                 + "摘要、旧索引引句中的省略/待提取描述是当时状态，不代表本次片段不可见；"
-                + "未列出的来源或范围仍需提取。同一来源同一范围与中期旧描述冲突时，以本区CURRENT_FILE片段为准，不覆盖用户要求或新版本文件；按currentValidity区分：CURRENT_FILE片段可复用，STALE需重新读取，UNKNOWN仅供追溯；历史测试不表示本轮重新执行。");
+                + "未列出的来源或范围仍需提取。同一来源同一范围与中期旧描述冲突时，以本区CURRENT_FILE片段为准，不覆盖用户要求或新版本文件；按currentValidity区分：CURRENT_FILE片段可复用，STALE/UNKNOWN可用于历史追溯，核对当前状态才需重读文件；历史测试不表示本轮重新执行。");
     }
 
     static String historicalAnswer(String answer, List<HistoricalEvidence> evidence) {
@@ -74,7 +74,7 @@ final class HistoricalEvidenceNotice {
                     });
         }
         index.put("notice", "仅为历史索引，validity是原证据状态；currentHistoricalRetrieval标明本次证据区实际保留的片段。"
-                + "已保留片段无需重复提取；CURRENT_FILE可直接复用，STALE须重新读取当前文件，UNKNOWN只供追溯；其他范围按需read_observation。");
+                + "已保留片段无需重复提取；CURRENT_FILE可直接复用，STALE/UNKNOWN可用于历史追溯，核对当前状态才需重读文件；其他范围按需read_observation。");
         return json.writeValueAsString(index);
     }
 
@@ -95,7 +95,7 @@ final class HistoricalEvidenceNotice {
                 + " 行，truncated=" + excerpt.isTruncated()
                 + "；仅此范围可见，不代表整份原文已取回，其他范围仍需 read_observation。"
                 + "currentValidity=" + excerpt.getCurrentValidity() + ", usageScope=" + scope(excerpt)
-                + "；CURRENT_FILE可复用已提取范围，STALE需重新读取，UNKNOWN仅供追溯。";
+                + "；CURRENT_FILE可复用已提取范围，STALE/UNKNOWN可用于历史追溯，核对当前状态才需重读文件。";
         if (stalePlaceholder) { return notice; }
         String marker = "[ARCHIVED_BODY call_id=" + exchange.call().id() + ";";
         int from = content.indexOf(marker);

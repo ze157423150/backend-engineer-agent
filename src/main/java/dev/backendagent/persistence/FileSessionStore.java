@@ -157,6 +157,7 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
         Path temporary = null;
         try {
             safeDirectory(session.id());
+            workspace.beginTurn(session.turns().size());
             var hashes = workspace.checkpointHashes();
             session.capturePendingToolHashes(hashes);
             var checkpoint = new SessionCheckpoint(3, session.id(), session.objective(), session.status(),
@@ -164,7 +165,7 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
                     session.staleEvidenceIds(), workspace.rootPath(), hashes,
                     workspace.originalContents(), workspace.createdFilePaths(), session.contextProjection(), session.contextSummary(),
                     session.workspaceState(), session.historicalEvidence(), session.turns(), session.conversationSummary(),
-                    session.failure(), session.pendingToolBatch(), session.verificationLedger());
+                    session.failure(), session.pendingToolBatch(), session.verificationLedger(), workspace.turnDiffState());
             Path target = sessionDirectory(session.id()).resolve("checkpoint.json");
             if (Files.isSymbolicLink(target)) { throw new IOException("Symlink checkpoint"); }
             temporary = Files.createTempFile(sessionDirectory(session.id()), ".checkpoint-", ".tmp");
@@ -329,6 +330,7 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
             } else { originals.addAll(checkpoint.getHistory()); }
             var session = AgentSession.restore(checkpoint, recordedEvents, this, originals);
             workspace.restoreChanges(checkpoint.getOriginalContents(), checkpoint.getCreatedFiles());
+            workspace.restoreTurnDiff(checkpoint.getTurnDiff());
             bindWorkspace(workspace);
             sequences.put(id, interruptedBatch ? originalSequence : checkpoint.getLastEventSequence());
             if (interruptedBatch) {

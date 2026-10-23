@@ -9,13 +9,18 @@ public final class IntegerCalculateTool implements Tool {
     public String name(){return "integer_calculate";}
     public ToolDefinition definition(){return new ToolDefinition(name(),
             "精确计算整数表达式，支持+、-、*、/、%、括号与一元正负号；除法向零截断（Java整数语义）。"
-                    + "无变量、浮点数或代码执行；先依据契约确定公式，用它核对测试期望值。",
-            Map.of("expression","最多512字符的十进制整数表达式，例如(2147483647-1)*200"));}
+                    + "无变量、浮点数或代码执行；先依据契约确定公式。result_name须标明业务量和单位，名称不证明单位正确。",
+            Map.of("expression","最多512字符的十进制整数表达式，例如(2147483647-1)*200",
+                    "result_name","结果名，体现业务量和单位；1..32位ASCII字母数字下划线，字母开头"),java.util.Set.of("expression","result_name"));}
     public ToolResult execute(Map<String,String> args){
-        if(!args.keySet().equals(java.util.Set.of("expression")))return new ToolResult(false,"必须仅提供expression");
+        if(!args.keySet().equals(java.util.Set.of("expression","result_name")))
+            return new ToolResult(false,"必须提供expression和result_name；结果名应体现业务量和单位");
+        String resultName=args.get("result_name");
+        if(resultName==null||!resultName.matches("[A-Za-z][A-Za-z0-9_]{0,31}"))
+            return new ToolResult(false,"result_name须为1..32位ASCII字母数字下划线，字母开头；只标注结果，不校验单位");
         String expression=args.get("expression");
         if(expression==null||expression.isBlank()||expression.length()>512)return new ToolResult(false,"表达式必须非空，最多512字符");
-        try{return new ToolResult(true,"value="+calculate(expression));}
+        try{return new ToolResult(true,resultName+"="+calculate(expression));}
         catch(IllegalArgumentException|ArithmeticException invalid){return new ToolResult(false,"仅支持有界十进制整数及+-*/%括号；检查语法、除零或长度限制，不执行代码");}
     }
     public static BigInteger calculate(String expression) {

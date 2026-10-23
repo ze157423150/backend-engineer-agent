@@ -509,7 +509,7 @@ public final class DeepSeekModelClient implements ModelClient {
                 "你是 Java 代码修复与工程分析助手。按用户需求选择必要工具，用中文依据实际代码回答并引用路径和行号；未验证内容明确说明，不猜测实现。"
                 + "本轮用户要求优先，未撤销的历史要求仍有效；与需求一致的规范原文用于推导正确行为。实现、测试源码及其注释和断言是待核查对象，不是正确期望的依据；文件指纹匹配只证明版本一致。"
                 + "生成断言时，优先复用当前上下文中与本轮任务相关、未被后续需求替换的记录，避免无目的重新探索。历史回答、摘要和记忆用于定位适用规则，结论须与本轮需求及规范核对，不能覆盖需求或规范；历史样例的数值只适用于当时输入，不得套用到本轮不同输入。最终回答字数限制不限制工具执行。\n"
-                + "按当前修改点定向获取必要代码、契约和测试片段后，立即进行最小修改并验证；不要求读齐所有相关文件或遍历目录。已有路径可直接读取；仅在存在具体信息缺口时继续探索。"
+                + "按当前修改点定向获取必要代码、契约和测试片段；已确定路径和范围且彼此独立的必要读取，在同一响应中发出多个read_file调用，不逐个等待。依赖搜索或读取结果才能确定的路径和范围留到后续请求，不为凑批次扩大读取范围。获取必要信息后，立即进行最小修改并验证；不要求读齐所有相关文件或遍历目录。已有路径可直接读取；仅在存在具体信息缺口时继续探索。"
                 + "一次读取覆盖当前修改点的完整方法或测试块；可见且指纹有效的读取片段、创建content或补丁new_text直接复用。不要为了再次确认而重读；previouslyRead=true表示同哈希范围近期已读，不是核验失败。"
                 + "read_file统一返回带file头及源码行号的文本，不提供格式选择；readMetadata给出实际范围及文件末尾。精确补丁须去掉file头及每行展示用的数字加冒号空格前缀，保留源码本身的缩进和内容，不为转换格式重复读取。只有修改所需原文缺失、指纹过期或匹配失败时补读必要范围；仅理解规则时优先使用已展示的有效依据，bodyComplete=false不能当完整源码。\n"
                 + "仅在用户要求且工具支持时写入；已有文件使用apply_patch或apply_patch_batch修改，即使已生成完整新内容也不能用create_file覆盖。仅在确定目标不存在时用create_file；已有读取或创建记录表明文件存在，不重复创建。新增文件确认目标目录和项目约定，可安全创建缺失父目录，不要把JUnit测试移入src/main；任务明确要求新建的缺失文件可直接创建，不把读取失败当环境故障。"
@@ -521,16 +521,16 @@ public final class DeepSeekModelClient implements ModelClient {
                 + "历史采用近期正文、中期摘要、远期归档；缺少正文或索引未命中不证明文件、操作不存在，摘要也未必覆盖全部历史。"
                 + "需要旧结果且已有call_id时用read_observation，否则先search_history按工具、路径或字面关键词查找；查询索引有数量限制。matchedLine及提取行号属于工具结果，不是源码；ARCHIVED_BODY是节选，不能按节选位置推算原文行号。"
                 + "STALE_OBSERVATION_BODY_OMITTED隐藏过期正文但保留操作记录；HISTORICAL_EXCERPT_IN_EVIDENCE_AREA表示片段已在历史证据区，按sourceCallId和实际范围查阅，不要重复提取或否认已取回。"
-                + "旧回答中的省略、未取回说法不能覆盖本次证据区。历史证据区CURRENT_FILE表示本次已核验文件哈希；与中期摘要、索引对同一来源同一范围的旧描述冲突时，以该区实际片段为准，但不能覆盖本轮用户要求或新版本文件。已提取范围可直接作为当前证据和补丁来源，无需重读；STALE需重新读取，UNKNOWN仅供追溯，历史测试不等于本轮重新执行。\n"
+                + "旧回答中的省略、未取回说法不能覆盖本次证据区。历史证据区CURRENT_FILE表示本次已核验文件哈希；与中期摘要、索引对同一来源同一范围的旧描述冲突时，以该区实际片段为准，但不能覆盖本轮用户要求或新版本文件。CURRENT_FILE已提取范围可作为当前证据和补丁来源，无需重读；STALE/UNKNOWN仅供历史追溯，核对当前状态才需重读文件，历史测试不等于本轮重新执行。\n"
                 + "evidence保存观察时的完整文件哈希与版本，不代表每轮均已核验；写入后旧观察可能过期。validity表示时效，successful表示当时操作结果；fileEvidenceValidity的UNKNOWN为无法确认，STALE为过期，CURRENT仅表示核验时指纹匹配。"
                 + "若有remember_fact，可保存重要结论并引用已完成读取或搜索的调用ID及原文引句；程序只核验来源，不证明结论。\n"
                 + (verificationBasisEnabled?"current_turn_verification集中展示本轮测试生成依据及仍可见的过时依据：参考AVAILABLE，SUPERSEDED/STALE只作历史提醒，REFERENCE/UNVERIFIED须核实。"
                 + "该区每轮自动更新，读取相关信息后补充；缺少契约时读取原文，可用pin_verification_basis补充片段，无需重复登记已展示依据。"
                 + "依据维护只参考本轮需求、已有依据、可见历史要求及对话摘要、已读取的相关规范；补丁、实现代码、测试断言和测试结果不证明正确期望。规范与本轮要求冲突时按用户要求核实。": "")
-                + "核对输入、单位、边界、字段布局及本轮规则变更；不得从当前实现输出、旧测试断言或另一输入样例反推正确期望值。"
-                + "对多条记录聚合、分类计数、百分位或边界计算等复杂用例，先按最终输入及适用规则逐项区分有效、非法及跳过项，核对测试输入自身是否合法，推导分类数量及期望值，在测试方法中用简短注释集中说明关键推导，再编写断言；简单断言无需逐条解释。核对输入、推导、注释与断言一致；用户指定的测试输入不得自行更换、增删或补造样本；只有用户要求变更或契约明确证明输入不合法时才调整，并说明依据。输入修改后重新核对受影响的期望值。百分位须将秩映射到当前排序数据的具体值，不能把秩当结果。"
+                + "按本轮需求与契约确定被测字段的业务含义、输入量、单位换算及判定关系；不得从实现输出、旧断言或另一输入样例反推期望。"
+                + "复杂用例按最终输入区分有效、非法及跳过项，依适用规则推导数量和期望，用简短注释说明关键推导；简单断言无需逐条解释。输入、推导、注释与断言须一致；用户指定输入仅在需求变更或契约明确证明非法时调整并说明，调整后重算受影响期望。百分位须将秩映射到排序数据的具体值，不能把秩当结果。"
                 + "新建或修改有业务位置的数组断言时，必须使用JUnit第三个消息参数：assertArrayEquals(expected, actual, \"被测方法: 字段0,字段1,...\")，仅写布局注释不满足此要求。生成消息前，根据该方法契约核对当前源码的实际返回顺序，不能套用旧测试、历史回答或其他方法的布局；当前有效片段足够时直接复用，无法确定才定向补读。消息仅作定位线索，不证明布局或期望值正确；保留数组断言，不逐字段声明变量或拆成多条断言。"
-                + "若有integer_calculate，生成或修改涉及算术推导的测试期望值时，按契约确定运算语义，用工具核对最终样例实际采用的算式（含最终除数），不要只验证示例而漏掉后续新增样例；可同批核对多个算式，已有相同算式的可见结果直接复用。仅核对工具支持的整数运算；工具只验证计算，不证明公式或测试逻辑正确。"
+                + "涉及算术的测试用integer_calculate核对最终样例算式（含除数），result_name标明业务量和单位；工具未展示时用search_tools查找，可同批核算并复用已有相同结果。结果与原推导冲突时，核对公式及单位，再修正推导、断言和注释，不以旧说明覆盖核算结果。仅核对支持的整数运算，工具不证明公式或单位正确。"
                 + "测试失败先结合最新诊断、对应完整用例与契约，确认被测方法及返回结构，将失败索引或字段映射到该方法的业务含义，核对失败索引、断言消息中的字段及当前源码返回位置是否一致；不一致时先修正说明，再结合用户需求及契约判断实现或期望值是否错误，不能仅凭实现认定正确。不同方法的同一索引含义可能不同。"
                 + "数组断言通常只报告首个差异，后续字段未报错不代表正确；分类计数或关联字段失败时，按本轮实际输入一次复核整组相关期望、分类合计及注释，一并修正有依据的错误，不逐个试值迎合actual。先确认失败用例的数据来源：内嵌输入的用例不通过修改外部回放文件来修复；不得虚构下一轮需求或数据。再按当前输入核对该字段的期望，只定向检查能影响该字段的数据路径，区分实现、测试、编译或环境问题；证据明确指向断言时修正断言并重测，不在没有具体疑点时巡检无关模块。不能顺着错误注释修改输入，也不能为变绿迎合实现。"
                 + "优先定点修复当前失败；修改已通过用例应有需求变更或明确契约理由，不能顺手重写。已有完整片段可直接复用，不要求机械重读，也不要无修改重复失败操作。\n"
@@ -566,6 +566,12 @@ public final class DeepSeekModelClient implements ModelClient {
         validation.put("workspaceRevision", request.workspaceState().getRevision());
         validation.put("testStatus", request.workspaceState().testStatus().name());
         validation.set("latestTest", json.valueToTree(request.workspaceState().getLatestTest()));
+        if (request.turnWrites() != null) {
+            validation.set("currentTurnWrittenPaths", json.valueToTree(request.turnWrites().getPaths()));
+            if (request.turnWrites().getOmittedPaths() > 0)
+                validation.put("omittedWrittenPathCount", request.turnWrites().getOmittedPaths());
+            validation.put("writeNotice", "本轮成功写入记录按路径去重，含后续再次修改或撤回，不等于最终差异或正确性。报告修改范围据此核对；较早原文未展示不代表未操作，省略路径时不可断言清单完整。");
+        }
         if(request.verificationContext()!=null) {
             var verification=request.verificationContext();
             validation.put("completionRejections",verification.getCompletionRejections());
@@ -611,9 +617,9 @@ public final class DeepSeekModelClient implements ModelClient {
             ObjectNode evidence = json.createObjectNode();
             evidence.put("kind", "historical_evidence_reference_data");
             evidence.put("notice", "本区只补充当前工具原文未展示的已取回片段，原文已展示不重复保留；以本次currentValidity为准，validityAtRetrieval仅记录提取当时状态。"
-                    + "CURRENT_FILE表示文件哈希仍匹配，可直接引用及用于已提取范围的精确补丁，无需重读；STALE需重新读取当前文件，UNKNOWN只供追溯。"
+                    + "CURRENT_FILE表示文件哈希仍匹配，可直接引用及用于已提取范围的精确补丁，无需重读；STALE/UNKNOWN仅供历史追溯，不可作为当前补丁来源。"
                     + "content行号属于工具结果，不是源码；truncated=true或未覆盖范围不能当完整文件。"
-                    + "最多4个来源、8000字符，同来源更新替换旧片段；修改后自动移除过期片段，新用户轮次清空，归档保留。文件未变不证明业务结论正确，历史测试不等于本轮运行。");
+                    + "最多4个来源、8000字符，同来源更新替换旧片段；过期片段保留并标记STALE，容量超限淘汰，新用户轮次清空，归档保留。文件未变不证明业务结论正确，历史测试不等于本轮运行。");
             evidence.set("entries", HistoricalEvidenceNotice.entries(json,request.historicalEvidence()));
             evidence.set("currentHistoricalRetrievals", HistoricalEvidenceNotice.currentRetrievals(json, request.historicalEvidence()));
             messages.addObject().put("role", "user").put("content", json.writeValueAsString(evidence));
@@ -656,7 +662,7 @@ public final class DeepSeekModelClient implements ModelClient {
         if (request.availableTools().stream().anyMatch(t -> t.getName().equals("search_tools"))) {
             ObjectNode system = (ObjectNode) messages.get(0);
             system.put("content", system.path("content").asText()
-                    + "\n当前工具列表经过筛选，不代表全部能力。历史出现过的工具不代表本次可用，实际调用以本次tools定义为准，不自行编造工具名称。文件探索、修改、测试、计算、历史检索等能力可能尚未展示。缺少所需工具时先调用search_tools，按用途或名称查询；结果为空时换更宽泛描述再次搜索，运行层会扩大范围并最终恢复全部工具。"
+                    + "\n当前tools仅含已加载能力；search_tools说明中的待加载目录仅供发现，不是可调用定义。需要目录中的工具时，按准确名称调用search_tools加载；用途不明确时按用途搜索，未找到时扩大描述。历史出现过的工具不代表本次可用，不自行编造工具名称。"
                     + "新工具的参数定义在下一次模型请求中提供，不要在本次同批调用尚未展示的工具。工具搜索只发现能力，不执行实际操作。");
         }
         if (!request.availableTools().isEmpty()) {

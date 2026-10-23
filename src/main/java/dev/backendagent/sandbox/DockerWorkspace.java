@@ -24,6 +24,7 @@ public final class DockerWorkspace implements WorkspaceAccess {
     private final ObjectMapper json = new ObjectMapper();
     private Map<String, String> originals = Map.of();
     private Set<String> created = Set.of();
+    private dev.backendagent.tools.TurnDiffState turnDiff = dev.backendagent.tools.TurnDiffState.empty(0);
     private boolean uncertainMutation;
 
     private DockerWorkspace(Path root, CommandRunner runner, String image) throws IOException {
@@ -83,6 +84,16 @@ public final class DockerWorkspace implements WorkspaceAccess {
     }
     public ToolResult createFile(String path, String content) { return tool("create_file", Map.of("path", path, "content", content), true); }
     public ToolResult diff(String path) { return tool("workspace_diff", Map.of("path", path), false); }
+    public ToolResult diff(String path,String scope) { return tool("workspace_diff",Map.of("path",path,"scope",scope),false); }
+    public void beginTurn(int turnId) {
+        if(turnId<1||turnId<turnDiff.getTurnId())throw new IllegalArgumentException("Invalid turn diff boundary");
+        if(turnId!=turnDiff.getTurnId())turnDiff=dev.backendagent.tools.TurnDiffState.empty(turnId);
+    }
+    public dev.backendagent.tools.TurnDiffState turnDiffState() {return turnDiff;}
+    public void restoreTurnDiff(dev.backendagent.tools.TurnDiffState state) throws IOException {
+        var before=turnDiff;turnDiff=java.util.Objects.requireNonNull(state);
+        try {invoke("hashes",Map.of(),false);}catch(IOException|RuntimeException e){turnDiff=before;throw e;}
+    }
     public Map<String, String> originalContents() { return originals; }
     public Set<String> createdFilePaths() { return created; }
     public Map<String, String> checkpointHashes() throws IOException {
@@ -119,6 +130,7 @@ public final class DockerWorkspace implements WorkspaceAccess {
             request.set("arguments", json.valueToTree(arguments));
             request.set("originals", json.valueToTree(originals));
             request.set("created", json.valueToTree(created));
+            request.set("turnDiff",json.valueToTree(turnDiff));
             byte[] input = json.writeValueAsBytes(request);
             if (input.length > WorkspaceWorker.MAX_PROTOCOL_BYTES) { throw new IOException("Worker input too large"); }
             Files.write(exchange.resolve("input.json"), input);
@@ -153,8 +165,15 @@ public final class DockerWorkspace implements WorkspaceAccess {
             var nextCreated = json.convertValue(response.path("created"),
                     new com.fasterxml.jackson.core.type.TypeReference<Set<String>>() { });
             if (nextOriginals.size() > 32 || !nextOriginals.keySet().containsAll(nextCreated)) { throw new IOException("Invalid worker state"); }
+            if (!response.path("turnDiff").isObject())throw new IOException("Worker turn diff state missing; rebuild sandbox image");
+            var nextTurn=json.treeToValue(response.path("turnDiff"),dev.backendagent.tools.TurnDiffState.class);
+            if(nextTurn.getTurnId()!=turnDiff.getTurnId()||nextTurn.isAvailable()!=turnDiff.isAvailable())
+                throw new IOException("Worker turn boundary mismatch");
+            if(!mutation && (!nextTurn.getOriginals().equals(turnDiff.getOriginals())||!nextTurn.getCreated().equals(turnDiff.getCreated())))
+                throw new IOException("Read operation changed turn diff state");
             originals = Map.copyOf(nextOriginals);
             created = Set.copyOf(nextCreated);
+            turnDiff=nextTurn;
             return response;
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();

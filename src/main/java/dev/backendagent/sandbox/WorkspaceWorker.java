@@ -36,6 +36,7 @@ public final class WorkspaceWorker {
         Set<String> created = JSON.convertValue(request.path("created"),
                 new com.fasterxml.jackson.core.type.TypeReference<Set<String>>() { });
         workspace.restoreChanges(originals, created);
+        if(request.has("turnDiff"))workspace.restoreTurnDiff(JSON.treeToValue(request.path("turnDiff"),dev.backendagent.tools.TurnDiffState.class));
         var args = request.path("arguments");
         Set<String> expected = switch (operation) {
             case "ping", "hashes" -> Set.of();
@@ -52,6 +53,7 @@ public final class WorkspaceWorker {
         if (operation.equals("read_file") && actual.contains("format")) {
             actual.remove("format");
         }
+        if(operation.equals("workspace_diff")&&actual.contains("scope"))actual.remove("scope");
         if (!args.isObject() || !expected.equals(actual)) { throw new IllegalArgumentException("Unexpected arguments"); }
         ToolResult result = switch (operation) {
             case "ping" -> new ToolResult(true, "workspace-worker-v1");
@@ -64,7 +66,7 @@ public final class WorkspaceWorker {
             case "apply_patch_batch" -> workspace.applyPatchBatch(text(args,"path"),text(args,"expected_sha256"),
                     JSON.readValue(text(args,"patches"),new com.fasterxml.jackson.core.type.TypeReference<java.util.List<dev.backendagent.tools.PatchEdit>>(){}));
             case "create_file" -> workspace.createFile(text(args, "path"), text(args, "content"));
-            case "workspace_diff" -> workspace.diff(text(args, "path"));
+            case "workspace_diff" -> args.has("scope") ? workspace.diff(text(args,"path"),text(args,"scope")) : workspace.diff(text(args, "path"));
             case "hashes" -> new ToolResult(true, "workspace hashes");
             default -> throw new IllegalArgumentException("Operation not allowed");
         };
@@ -72,6 +74,7 @@ public final class WorkspaceWorker {
         response.set("result", JSON.valueToTree(result));
         response.set("originals", JSON.valueToTree(workspace.originalContents()));
         response.set("created", JSON.valueToTree(workspace.createdFilePaths()));
+        response.set("turnDiff",JSON.valueToTree(workspace.turnDiffState()));
         if (operation.equals("hashes")) { response.set("hashes", JSON.valueToTree(workspace.checkpointHashes())); }
         byte[] bytes = JSON.writeValueAsBytes(response);
         if (bytes.length > MAX_PROTOCOL_BYTES) { throw new IllegalArgumentException("Response exceeds limit"); }

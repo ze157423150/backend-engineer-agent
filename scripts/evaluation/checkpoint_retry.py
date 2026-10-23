@@ -12,6 +12,13 @@ import shutil
 import subprocess
 import sys
 
+# A completed session is still an unsuccessful attempt when code acceptance fails.
+# Retry only from the previous accepted snapshot; never expose private grader output.
+RETRYABLE_OUTCOMES = frozenset({
+    'RETRYABLE_SESSION_FAILURE', 'RETRYABLE_PROCESS_FAILURE',
+    'INDEPENDENT_ACCEPTANCE_FAILURE',
+})
+
 class InvalidBoundary(RuntimeError):
     pass
 
@@ -113,7 +120,12 @@ def classify(directory, turn, exit_code):
         return 'RETRYABLE_SESSION_FAILURE'
     if row['status'] != 'COMPLETED':
         return 'HARNESS_FAILURE'
-    return 'ACCEPTED' if row.get('independentTestsPassed') is True else 'INDEPENDENT_ACCEPTANCE_FAILURE'
+    if row.get('independentTestsPassed') is True:
+        return 'ACCEPTED'
+    if row.get('independentTestsPassed') is False:
+        return 'INDEPENDENT_ACCEPTANCE_FAILURE'
+    # No trustworthy acceptance result: this is a harness problem, not a model retry.
+    return 'HARNESS_FAILURE'
 
 def summary(report):
     attempts = [a for t in report['turns'] for a in t['attempts']]
@@ -170,7 +182,7 @@ def run_suite(bundle, root, turns, max_attempts, run_attempt, config_hash_check=
                 summary(report); write(root / 'report.json', report)
                 if row['accepted']:
                     break
-                if item['outcome'] not in ['RETRYABLE_SESSION_FAILURE', 'RETRYABLE_PROCESS_FAILURE']:
+                if item['outcome'] not in RETRYABLE_OUTCOMES:
                     report.update(status='STOPPED', stopReason=item['outcome']); break
             if not row['accepted']:
                 report.update(status='STOPPED', stopReason=report.get('stopReason', 'RETRY_LIMIT_REACHED')); break

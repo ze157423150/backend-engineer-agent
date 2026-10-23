@@ -32,7 +32,7 @@ class HistoricalEvidenceIntegrationTest {
             var next = new AtomicInteger();
             new AgentRuntime(request -> ModelResponse.callTool(calls.get(next.getAndIncrement())), tools(session, workspace, store), 4).run(session);
             assertEquals(AgentSession.Status.BUDGET_EXHAUSTED, session.status());
-            assertTrue(session.historicalEvidence().isEmpty());
+            assertEquals(1,session.historicalEvidence().size());
             assertEquals(3, json.readTree(Files.readString(store.sessionDirectory(session.id()).resolve("checkpoint.json"))).path("schemaVersion").asInt());
             return session.id();
         }
@@ -42,19 +42,23 @@ class HistoricalEvidenceIntegrationTest {
         try (var store = new FileSessionStore(root.resolve("sessions"))) {
             var workspace = workspace(); var restored = store.restore(id, workspace, 6);
             new AgentRuntime(request -> {
-                assertTrue(request.historicalEvidence().isEmpty());
+                assertEquals(1,request.historicalEvidence().size());
+                assertEquals(ObservationEvidence.Validity.STALE,request.historicalEvidence().getFirst().getCurrentValidity());
+                assertTrue(request.historicalEvidence().getFirst().getContent().contains("RATE=225"));
                 assertFalse(restored.hasCurrentRead("rate.txt", workspace));
+                assertFalse(restored.hasCurrentPatchSource("rate.txt","RATE=225",workspace));
                 assertTrue(request.history().stream().filter(x -> x.call().id().equals("retrieve")).findFirst().orElseThrow().result().content().contains("STALE_OBSERVATION_BODY_OMITTED"));
                 var client = new DeepSeekModelClient("test-key", java.net.URI.create("https://api.deepseek.com"), "test-model", java.time.Duration.ofSeconds(1));
                 var wire = assertDoesNotThrow(() -> client.buildRequest(request));
                 assertEquals(wire.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length, client.inspectRequest(request).getRequestBytes());
-                assertFalse(wire.toString().contains("historical_evidence_reference_data"));
+                assertTrue(wire.toString().contains("historical_evidence_reference_data"));
+                assertTrue(wire.toString().contains("HISTORICAL_ONLY"));
                 for (String callId : List.of("original", "retrieve")) {
                     var message = java.util.stream.StreamSupport.stream(wire.path("messages").spliterator(), false)
                             .filter(m -> m.path("tool_call_id").asText().equals(callId)).findFirst().orElseThrow();
                     var result = assertDoesNotThrow(() -> json.readTree(message.path("content").asText()));
-                    assertTrue(result.path("content").asText().contains("STALE_OBSERVATION_BODY_OMITTED"));
-                    assertFalse(result.path("content").asText().contains("HISTORICAL_EXCERPT_IN_EVIDENCE_AREA"));
+                    assertFalse(result.path("content").asText().contains("STALE_OBSERVATION_BODY_OMITTED"));
+                    assertTrue(result.path("content").asText().contains("HISTORICAL_EXCERPT_IN_EVIDENCE_AREA"));
                 }
                 return ModelResponse.finish("old=225; current requires fresh read");
             }, tools(restored, workspace, store), 6).resume(restored);
@@ -66,7 +70,7 @@ class HistoricalEvidenceIntegrationTest {
         var checkpoint = json.readTree(Files.readString(file));
         var forged=checkpoint.path("history").get(2).path("result").path("historicalEvidence").deepCopy();
         ((com.fasterxml.jackson.databind.node.ObjectNode)forged).put("content","2: RATE=111\n");
-        ((com.fasterxml.jackson.databind.node.ArrayNode)checkpoint.path("historicalEvidence")).add(forged);
+        ((com.fasterxml.jackson.databind.node.ArrayNode)checkpoint.path("historicalEvidence")).removeAll().add(forged);
         Files.writeString(file, checkpoint.toString());
         try (var store = new FileSessionStore(root.resolve("sessions"))) { assertThrows(IllegalArgumentException.class, () -> store.restore(id, workspace(), 6)); }
     }

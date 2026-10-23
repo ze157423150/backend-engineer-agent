@@ -37,6 +37,26 @@ public final class Workspace implements WorkspaceAccess {
     private final Set<Path> excludedDirectories;
     private final Map<Path, String> originals = new LinkedHashMap<>();
     private final Set<Path> createdFiles = new HashSet<>();
+    private TurnDiffState turnDiff = TurnDiffState.empty(0);
+
+    public void beginTurn(int turnId) {
+        if (turnId < 1 || turnId < turnDiff.getTurnId()) throw new IllegalArgumentException("Invalid turn diff boundary");
+        if (turnId != turnDiff.getTurnId()) turnDiff=TurnDiffState.empty(turnId);
+    }
+    public TurnDiffState turnDiffState() { return turnDiff; }
+    public void restoreTurnDiff(TurnDiffState state) throws IOException {
+        for (String path : state.getOriginals().keySet()) {
+            Path file=resolve(path);
+            if (!readableText(file)||!relative(file).equals(path)) throw new IOException("Invalid turn diff path");
+        }
+        turnDiff=state;
+    }
+    private void rememberTurnOriginal(Path file,String before,boolean created) {
+        if (!turnDiff.isAvailable() || turnDiff.getOriginals().containsKey(relative(file))) return;
+        var contents=new LinkedHashMap<>(turnDiff.getOriginals());contents.put(relative(file),before);
+        var newFiles=new HashSet<>(turnDiff.getCreated());if(created)newFiles.add(relative(file));
+        turnDiff=new TurnDiffState(turnDiff.getTurnId(),true,contents,newFiles);
+    }
 
     public Workspace(Path root, Path configFile) throws IOException {
         this(root, configFile, null);
@@ -359,6 +379,7 @@ public final class Workspace implements WorkspaceAccess {
             }
             Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             originals.putIfAbsent(file, before);
+            rememberTurnOriginal(file,before,false);
             return new ToolResult(true, "file=" + relative(file)
                     + "\n已完成一次精确替换。补丁数=" + edits.size() + "，均基于同一版本验证、一次原子写入。"
                     + "指纹对应本次写入后的完整文件；可复用仍可见的new_text片段，其他内容需按需读取。尚未运行编译或测试。",
@@ -415,6 +436,7 @@ public final class Workspace implements WorkspaceAccess {
             completed = true;
             originals.put(file, "");
             createdFiles.add(file);
+            rememberTurnOriginal(file,"",true);
             return new ToolResult(true, "file=" + relative(file)
                     + "\n已创建新文件，未覆盖已有文件，指纹对应创建时写入的完整字节。创建参数中的源码可用于后续补丁；尚未编译或测试。",
                     fingerprint(file, bytes));
@@ -522,6 +544,24 @@ public final class Workspace implements WorkspaceAccess {
         } catch (IOException | IllegalArgumentException failure) {
             return failure("差异不可读取，请使用工作区内可访问的相对文件路径");
         }
+    }
+
+    public ToolResult diff(String path,String scope) {
+        if ("session".equals(scope)) {
+            ToolResult result=diff(path);
+            return new ToolResult(result.successful(),"scope=session\n"+result.content());
+        }
+        if (!"turn".equals(scope)) return failure("scope只支持turn或session");
+        if (!turnDiff.isAvailable()) return failure("本轮基线未保存（旧检查点）；可用scope=session查看累计差异，下一轮自动启用本轮差异。");
+        try {
+            Path file=resolve(path);String before=turnDiff.getOriginals().get(relative(file));
+            if(before==null)return new ToolResult(true,"scope=turn, turn="+turnDiff.getTurnId()+"\n[本轮未成功修改此文件]");
+            if(!readableText(file))return failure("修改后的文件无法读取");
+            String after=Files.readString(file);
+            return new ToolResult(true,"scope=turn, turn="+turnDiff.getTurnId()+"\n"+
+                    (before.equals(after)&&!turnDiff.getCreated().contains(relative(file)) ? "[相对本轮首次修改前，没有净差异]"
+                    : FileDiff.render(relative(file),before,after,MAX_OUTPUT_CHARS,turnDiff.getCreated().contains(relative(file)))));
+        } catch(IOException|IllegalArgumentException error){return failure("差异不可读取，请使用工作区内可访问的相对文件路径");}
     }
 
     /** Protected configs, symlinks, hidden files and build output are excluded from the snapshot. */

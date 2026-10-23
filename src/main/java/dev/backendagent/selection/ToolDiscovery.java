@@ -15,7 +15,7 @@ public final class ToolDiscovery {
     private final ToolSelector selector;
     private final int initialLimit;
     private final ToolSearchRanker searchRanker;
-    public ToolDiscovery(List<ToolDefinition> catalog) { this(catalog, new RuleToolSelector(), 8); }
+    public ToolDiscovery(List<ToolDefinition> catalog) { this(catalog, new CoreToolSelector(), 8, new Bm25ToolSearchRanker()); }
     public ToolDiscovery(List<ToolDefinition> catalog, ToolSelector selector, int initialLimit) {
         this(catalog,selector,initialLimit,new LexicalToolSearchRanker());
     }
@@ -29,7 +29,7 @@ public final class ToolDiscovery {
     }
     public static ToolDefinition definition() {
         return new ToolDefinition(NAME,
-                "查询当前未展示的工具能力。query可写工具名或用途。首次最多补充3个，第二次扩大匹配最多5个；仍未找到时恢复全部已注册工具。返回名称和短说明，参数定义在下一次请求中提供。",
+                "加载工具：query可写目录中的准确名称或用途。精确名称直接加载；用途用相关性搜索。连续无新增时扩大范围并最终恢复全部注册工具。参数定义在下一次请求中提供，本次不执行目标工具。",
                 Map.of("query", "需要的能力或工具名称，1至300字符；未找到时改用更宽泛的关键词"));
     }
     public List<ToolDefinition> definitions(AgentSession session) {
@@ -38,9 +38,33 @@ public final class ToolDiscovery {
         names.addAll(state.discovered);
         var result = new ArrayList<>(catalog.stream().filter(t -> names.contains(t.getName())).toList());
         var search = definition();
+        if (selector instanceof CoreToolSelector) {
+            var directory = new StringBuilder("\n待加载目录（仅名称与用途，不可直接调用）：");
+            for (var tool : catalog) {
+                if (!names.contains(tool.getName())) directory.append('\n').append(tool.getName())
+                        .append(": ").append(shortDescription(tool));
+            }
+            if (catalog.stream().anyMatch(t -> !names.contains(t.getName())))
+                search = new ToolDefinition(NAME, search.getDescription() + directory, search.getParameters());
+        }
         String feedback = recoveryFeedback(session);
         result.add(feedback.isEmpty() ? search : new ToolDefinition(NAME, search.getDescription() + feedback, search.getParameters()));
         return List.copyOf(result);
+    }
+    private static String shortDescription(ToolDefinition tool) {
+        return switch (tool.getName()) {
+            case "apply_patch_batch" -> "同一文件多处非重叠补丁，原子写入";
+            case "create_file" -> "创建不存在的新文件，不覆盖已有文件";
+            case "integer_calculate" -> "核算整数表达式，标注业务量和单位";
+            case "read_observation" -> "按调用ID提取归档工具结果";
+            case "search_history" -> "搜索归档工具结果，定位调用ID";
+            case "search_turns" -> "搜索旧用户需求与助手回答";
+            case "read_turn" -> "按轮次来源ID提取旧需求或回答";
+            case "remember_fact" -> "保存带来源的重要结论";
+            case "pin_verification_basis" -> "提取并保留相关规范原文";
+            case "workspace_diff" -> "查看本轮或整个会话的文件改动";
+            default -> tool.getDescription().substring(0, Math.min(50, tool.getDescription().length()));
+        };
     }
     /** Persist only registered names, using the existing retry event. No rejected arguments are retained. */
     public String recoveryEvent(AgentSession session, List<String> proposedNames) {
@@ -69,7 +93,7 @@ public final class ToolDiscovery {
         if (latest.path("modelCall").asInt() != session.modelCalls()) return "";
         return latest.path("full").asBoolean()
                 ? "上次请求包含未注册工具，整个批次未执行；现已恢复全部已注册工具。请只用当前工具定义重新生成调用，缺少能力时如实说明。"
-                : "上次请求包含被筛选隐藏的工具，整个批次未执行；现已补充其参数定义。请按当前定义重新生成必要调用，不要假定上次操作已成功。";
+                : latest.path("tools").toString() + " 尚未加载；上次整个批次未执行。现已提供完整参数定义，请按定义重新生成必要调用，不要假定上次操作已成功。";
     }
 
     public ToolResult search(AgentSession session, Map<String, String> arguments) {
@@ -95,15 +119,24 @@ public final class ToolDiscovery {
     }
     private State replay(AgentSession session) {
         var state = new State();
-        var prefix = new ArrayList<ToolExchange>();
         for (var exchange : currentHistory(session)) {
             if (exchange.call().name().equals(NAME) && exchange.result().successful()) {
-                var visible = selected(task(session), prefix);
-                visible.addAll(state.discovered);
-                var outcome = find(exchange.call().arguments().get("query"), ++state.attempts, visible);
-                outcome.tools.forEach(t -> state.discovered.add(t.getName()));
+                // Restore the actual durable selection, not a fresh ranking that may change after upgrade.
+                try {
+                    var saved = JSON.readTree(exchange.result().content());
+                    String status = saved.path("status").asText();
+                    if (!Set.of("ADDED", "NO_MATCH", "ALREADY_VISIBLE", "FULL_FALLBACK").contains(status))
+                        throw new IllegalStateException("Invalid durable tool search status");
+                    for (var item : saved.path("tools")) {
+                        String name = item.path("name").asText();
+                        if (catalog.stream().anyMatch(t -> t.getName().equals(name))) state.discovered.add(name);
+                    }
+                    if (status.equals("FULL_FALLBACK")) catalog.forEach(t -> state.discovered.add(t.getName()));
+                    state.attempts = status.equals("ADDED") ? 0 : state.attempts + 1;
+                } catch (java.io.IOException invalid) {
+                    throw new IllegalStateException("Invalid durable tool search result", invalid);
+                }
             }
-            prefix.add(exchange);
         }
         for (var recovery : recoveries(session)) {
             if (recovery.path("full").asBoolean()) catalog.forEach(t -> state.discovered.add(t.getName()));
@@ -114,6 +147,9 @@ public final class ToolDiscovery {
         return state;
     }
     private Outcome find(String query, int attempt, Set<String> visible) {
+        var exact = catalog.stream().filter(t -> t.getName().equals(query.trim())).findFirst();
+        if (exact.isPresent()) return visible.contains(exact.get().getName())
+                ? new Outcome("ALREADY_VISIBLE", List.of()) : new Outcome("ADDED", List.of(exact.get()));
         if (attempt >= 3) return new Outcome("FULL_FALLBACK", catalog);
         var ranked = searchRanker.rank(query,catalog,attempt > 1);
         double best = ranked.isEmpty() ? 0 : ranked.getFirst().getScore();

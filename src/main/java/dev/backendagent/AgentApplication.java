@@ -110,7 +110,7 @@ public final class AgentApplication {
                     new ApplyPatchTool(workspace, session), new CreateFileTool(workspace, session),
                     new WorkspaceDiffTool(workspace), new RunTestsTool(workspace, sandbox));
             java.util.function.IntFunction<AgentRuntime> runtimeFactory = limit -> new AgentRuntime(model, tools, limit,
-                    new ContextBudget(options.getMaxHistoryCharacters()), options.getMinimumSummaryInputCharacters(), System.out::println).withToolSelection(options.isToolSelectionEnabled());
+                    new ContextBudget(options.getMaxHistoryCharacters()), options.getMinimumSummaryInputCharacters(), System.out::println).withToolSelection(options.getToolSelectionMode());
 
             System.out.println("Session ID: " + session.id());
             System.out.println("Session files: " + store.sessionDirectory(session.id()));

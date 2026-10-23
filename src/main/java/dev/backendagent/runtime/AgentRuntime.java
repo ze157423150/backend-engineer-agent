@@ -84,6 +84,15 @@ public final class AgentRuntime {
         return this;
     }
 
+    public AgentRuntime withToolSelection(String mode) {
+        return switch (mode) {
+            case "all" -> withToolSelection(false);
+            case "catalog" -> withToolSelection(true);
+            case "rule" -> withToolSelection(new dev.backendagent.selection.RuleToolSelector(), 8);
+            default -> throw new IllegalArgumentException("Unknown tool selection mode");
+        };
+    }
+
     public AgentRuntime withToolSelection(dev.backendagent.selection.ToolSelector selector, int initialLimit) {
         toolDiscovery = new dev.backendagent.selection.ToolDiscovery(
                 tools.values().stream().map(Tool::definition).toList(), selector, initialLimit);
@@ -138,6 +147,8 @@ public final class AgentRuntime {
         session.history().forEach(exchange -> seenCallIds.addAll(PatchBatchNormalizer.ids(exchange.call())));
         boolean completeToolBatch = true;
         try {
+            if (tools.get("workspace_diff") instanceof dev.backendagent.tools.WorkspaceDiffTool diff)
+                diff.beginTurn(session.turns().size());
             var noProgress = NoProgressDetector.start(session);
             session.setNoProgressReport(null);
             while (session.status() == RUNNING) {
@@ -357,6 +368,7 @@ public final class AgentRuntime {
             session.append(TOOL_EXECUTION_STARTED, "callId=" + call.id(), session.pendingToolBatch());
             ToolResult result = executeTool(call, session);
             if (call.name().equals("run_tests")) {
+                result = withTestFailureGuidance(session, call, result);
                 result = new ToolResult(result.successful(), "workspaceRevision="
                         + session.workspaceState().getRevision() + "\n" + result.content());
             }
@@ -384,6 +396,19 @@ public final class AgentRuntime {
         session.append(TOOL_BATCH_COMPLETED, "call=" + session.modelCalls());
         session.releaseOldBodies();
         session.checkpoint();
+    }
+
+    private static ToolResult withTestFailureGuidance(AgentSession session, ToolCall call, ToolResult result) {
+        var current = dev.backendagent.verification.TestFailureReport.from(call.id(),
+                session.workspaceState().getRevision(), result.successful(), result.content());
+        if (!current.getKind().equals("TEST_FAILURE")) return result;
+        String hint = "请围绕失败断言核对相关输入、算式和期望值；按契约核对字段含义与单位，将已核实算式的结果落实到断言和注释。无须重查无关部分。";
+        var previous = session.latestVerificationTest();
+        if (previous != null && !previous.isSuccessful() && current.getFailures().stream()
+                .anyMatch(f -> previous.getFailures().stream().anyMatch(p -> p.getMethod().equals(f.getMethod())))) {
+            hint += "上次修改未解决该断言，请检查是否遗漏了尚未解释的差异。";
+        }
+        return new ToolResult(false, result.content() + "\n" + hint);
     }
 
     private static final class PreparedContext {

@@ -373,12 +373,6 @@ public final class AgentSession {
         historicalEvidence.removeSources(ids);
         append(EventType.HISTORICAL_EVIDENCE_REMOVED,history.size()+":"+String.join(",",indexes));
     }
-    private void pruneExpiredHistoricalEvidence() {
-        pruneHistoricalEvidence(e->e.getValidityAtRetrieval()==ObservationEvidence.Validity.STALE
-                || staleEvidenceIds.contains(e.getSourceCallId())
-                || (e.getSourceFile()!=null&&verificationHashes!=null
-                    && !e.getSourceFile().getSha256().equals(verificationHashes.get(e.getSourceFile().getPath()))));
-    }
     public int historicalEvidenceCharacters() { return historicalEvidence.characterCount(); }
     void retainHistoricalEvidence(ToolExchange retrieval) {
         var evidence = retrieval.result().historicalEvidence();
@@ -387,8 +381,10 @@ public final class AgentSession {
         historicalEvidence.retain(evidence);
         append(EventType.HISTORICAL_EVIDENCE_UPDATED, "retained=" + historicalEvidence.snapshot().size()
                 + ", sourceCallId=" + evidence.getSourceCallId(), historicalEvidence.snapshot());
-        pruneHistoricalEvidence(e->e.getValidityAtRetrieval()==ObservationEvidence.Validity.STALE || staleEvidenceIds.contains(e.getSourceCallId())
-                || (contextProjection!=null && dev.backendagent.history.HistoricalEvidenceArea.originalVisible(e,contextProjection.getHistory())));
+        // Currency limits usage, not historical availability; retain stale excerpts until
+        // ordinary capacity eviction, visible-original deduplication or a new user turn.
+        pruneHistoricalEvidence(e->contextProjection!=null
+                && dev.backendagent.history.HistoricalEvidenceArea.originalVisible(e,contextProjection.getHistory()));
     }
     public int memoryCharacters() { return workingMemory.characterCount(); }
     public WorkspaceState workspaceState() { return workspaceState; }
@@ -424,7 +420,6 @@ public final class AgentSession {
         catch (java.io.IOException unavailable) { /* Unknown currency must not authorize registration. */ }
         verificationState.refresh(hashes, staleEvidenceIds);
         verificationHashes = hashes;
-        pruneExpiredHistoricalEvidence();
     }
     public int completionRejections() {
         String prefix = "turn=" + turns().size() + ";";
@@ -518,7 +513,6 @@ public final class AgentSession {
             }
         }
         workingMemory.removeSources(staleEvidenceIds);
-        pruneHistoricalEvidence(e->e.getSourceFile()!=null && Path.of(e.getSourceFile().getPath()).normalize().equals(changed));
         append(EventType.FILE_EVIDENCE_INVALIDATED, "file=" + changed
                 + ", remainingMemoryFacts=" + memoryFacts().size()
                 + "; earlier file reads and searches are historical data; read again before citing current code",

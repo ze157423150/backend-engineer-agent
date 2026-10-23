@@ -32,13 +32,26 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DeepSeekModelClientTest {
+    @Test void currentTurnWritePathsRemainInExistingValidationMessageWithNoVisibleToolBodies() throws Exception {
+        var writes = dev.backendagent.runtime.TurnWriteSummary.fromHistory(List.of(
+                new ToolExchange(new ToolCall("write", "apply_patch", java.util.Map.of("path", "src/A.java")), new ToolResult(true, "written"))));
+        var request = new ModelRequest("报告本轮修改", List.of(), List.of(), 2).withTurnWrites(writes);
+        var body = client(Duration.ofSeconds(5)).buildRequest(request);
+        var messages = body.path("messages");
+        var validation = json.readTree(messages.get(2).path("content").asText());
+        assertEquals("workspace_validation_state", validation.path("kind").asText());
+        assertEquals("src/A.java", validation.path("currentTurnWrittenPaths").get(0).asText());
+        assertTrue(validation.path("writeNotice").asText().contains("不等于最终差异或正确性"));
+        assertEquals(3, messages.size());
+    }
     @Test void discoveryInstructionOnlyAppearsWhenSearchIsAvailable() throws Exception {
         var adapter = client(Duration.ofSeconds(5));
         var full = adapter.buildRequest(new ModelRequest("inspect", List.of(), List.of(), 3));
-        assertFalse(full.path("messages").get(0).path("content").asText().contains("当前工具列表经过筛选"));
+        assertFalse(full.path("messages").get(0).path("content").asText().contains("待加载目录仅供发现"));
         var selected = adapter.buildRequest(new ModelRequest("inspect", List.of(),
                 List.of(dev.backendagent.selection.ToolDiscovery.definition()), 3));
-        assertTrue(selected.path("messages").get(0).path("content").asText().contains("结果为空时换更宽泛描述"));
+        assertTrue(selected.path("messages").get(0).path("content").asText().contains("待加载目录仅供发现，不是可调用定义"));
+        assertTrue(selected.path("messages").get(0).path("content").asText().contains("新工具的参数定义在下一次模型请求中提供"));
         assertEquals(1, selected.path("tools").size());
         assertEquals("search_tools", selected.path("tools").get(0).path("function").path("name").asText());
     }
