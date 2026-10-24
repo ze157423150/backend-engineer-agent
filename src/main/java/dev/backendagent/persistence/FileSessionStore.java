@@ -34,11 +34,17 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
 
     /** Bound to this session; the model cannot choose a log path or another session ID. */
     public dev.backendagent.history.ObservationArchive observationArchive(AgentSession session) {
-        return visitor -> visitObservations(session.id(), session.events().size(), visitor);
+        return visitor -> visitObservations(session.id(), session.events().size(), visitor, true);
     }
 
     public synchronized void visitObservations(UUID id, long expectedSequence,
             dev.backendagent.history.ObservationVisitor visitor) throws IOException {
+        visitObservations(id, expectedSequence, visitor, false);
+    }
+
+    /** Restoration pairs only outer calls with checkpoint history; retrieval can include PTC children. */
+    private synchronized void visitObservations(UUID id, long expectedSequence,
+            dev.backendagent.history.ObservationVisitor visitor, boolean includePtc) throws IOException {
         safeDirectory(id);
         Path file = sessionDirectory(id).resolve("events.jsonl");
         if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) { throw new IOException("Invalid observation archive"); }
@@ -77,6 +83,7 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
                     var payload = switch (type) {
                         case "TOOL_EXECUTION_SUCCEEDED", "TOOL_EXECUTION_FAILED" -> event.path("payload");
                         case "WORKING_MEMORY_LOADED" -> event.path("payload").path("verifiedExchange");
+                        case "PTC_TOOL_CALL_COMPLETED" -> includePtc ? event.path("payload").path("exchange") : null;
                         default -> null;
                     };
                     if (payload == null) { continue; }

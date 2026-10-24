@@ -21,6 +21,7 @@ import static dev.backendagent.runtime.AgentSession.Status.*;
 /** Synchronous, single-worker runtime with an optional persistent session event sink. */
 public final class AgentRuntime {
     private dev.backendagent.selection.ToolDiscovery toolDiscovery;
+    private dev.backendagent.ptc.PtcExecution ptc;
     private final ModelClient model;
     private final boolean verificationBasisEnabled;
     private final Map<String, Tool> tools = new LinkedHashMap<>();
@@ -77,8 +78,17 @@ public final class AgentRuntime {
         }
     }
 
+    /** PTC is additive: normal write/test tools keep the established execution and recovery path. */
+    public AgentRuntime withPtc(dev.backendagent.ptc.PtcExecutor executor) {
+        if (executor == null) return this;
+        if (toolDiscovery != null) throw new IllegalArgumentException("PTC requires full tool definitions");
+        ptc = new dev.backendagent.ptc.PtcExecution(executor, tools.values());
+        return this;
+    }
+
     /** Opt-in experiment; the default remains the complete catalog. */
     public AgentRuntime withToolSelection(boolean enabled) {
+        if (enabled && ptc != null) throw new IllegalArgumentException("PTC requires full tool definitions");
         toolDiscovery = enabled ? new dev.backendagent.selection.ToolDiscovery(
                 tools.values().stream().map(Tool::definition).toList()) : null;
         return this;
@@ -94,6 +104,7 @@ public final class AgentRuntime {
     }
 
     public AgentRuntime withToolSelection(dev.backendagent.selection.ToolSelector selector, int initialLimit) {
+        if (ptc != null) throw new IllegalArgumentException("PTC requires full tool definitions");
         toolDiscovery = new dev.backendagent.selection.ToolDiscovery(
                 tools.values().stream().map(Tool::definition).toList(), selector, initialLimit);
         return this;
@@ -101,14 +112,17 @@ public final class AgentRuntime {
 
     public AgentRuntime withToolSelection(dev.backendagent.selection.ToolSelector selector, int initialLimit,
             dev.backendagent.selection.ToolSearchRanker searchRanker) {
+        if (ptc != null) throw new IllegalArgumentException("PTC requires full tool definitions");
         toolDiscovery = new dev.backendagent.selection.ToolDiscovery(
                 tools.values().stream().map(Tool::definition).toList(), selector, initialLimit, searchRanker);
         return this;
     }
 
     private List<dev.backendagent.tools.ToolDefinition> definitions(AgentSession session) {
-        return toolDiscovery == null ? tools.values().stream().map(Tool::definition).toList()
-                : toolDiscovery.definitions(session);
+        var definitions = new java.util.ArrayList<>(toolDiscovery == null
+                ? tools.values().stream().map(Tool::definition).toList() : toolDiscovery.definitions(session));
+        if (ptc != null) definitions.add(ptc.definition());
+        return List.copyOf(definitions);
     }
 
     public void run(AgentSession session) {
@@ -704,6 +718,7 @@ public final class AgentRuntime {
     }
 
     private ToolResult executeTool(ToolCall call, AgentSession session) {
+        if (ptc != null && call.name().equals(dev.backendagent.ptc.PtcExecution.NAME)) return ptc.execute(session, call);
         if (toolDiscovery != null && call.name().equals(dev.backendagent.selection.ToolDiscovery.NAME))
             return toolDiscovery.search(session, call.arguments());
         Tool tool = tools.get(call.name());

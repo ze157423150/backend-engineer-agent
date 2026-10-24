@@ -18,7 +18,7 @@ public final class AgentSession {
 
     public enum EventType {
         CONVERSATION_COMPACTION_STARTED, CONVERSATION_COMPACTION_COMPLETED, CONVERSATION_COMPACTION_FAILED, CONVERSATION_SUMMARY_SKIPPED, CONVERSATION_SUMMARY_ATTEMPTED, SUMMARY_REFINEMENT_STARTED, SUMMARY_REFINEMENT_COMPLETED, USER_TURN_STARTED, SESSION_STARTED, REQUEST_BUDGET_CHECKED, COMPACTION_STARTED, COMPACTION_COMPLETED, COMPACTION_FAILED, CONTEXT_ASSEMBLED, MODEL_CALL_STARTED, MODEL_RESPONSE_RECEIVED, MODEL_CALL_FAILED, MODEL_RETRY_SCHEDULED,
-        TOOL_CALL_REQUESTED, TOOL_EXECUTION_SUCCEEDED, TOOL_EXECUTION_FAILED, WORKING_MEMORY_UPDATED, FILE_EVIDENCE_INVALIDATED,
+        PTC_TOOL_CALL_STARTED, PTC_TOOL_CALL_COMPLETED, TOOL_CALL_REQUESTED, TOOL_EXECUTION_SUCCEEDED, TOOL_EXECUTION_FAILED, WORKING_MEMORY_UPDATED, FILE_EVIDENCE_INVALIDATED,
         WORKSPACE_REVISION_ADVANCED, TEST_RESULT_RECORDED,
         WORKING_MEMORY_LOADED, HISTORY_BODIES_ARCHIVED, HISTORICAL_EVIDENCE_UPDATED, HISTORICAL_EVIDENCE_CLEARED, HISTORICAL_EVIDENCE_REMOVED, WINDOW_SUMMARY_ATTEMPTED, WINDOW_SUMMARY_SKIPPED, SESSION_RESUMED, SESSION_COMPLETED, SESSION_FAILED, BUDGET_EXHAUSTED,
         TOOL_BATCH_STARTED, TOOL_BATCH_PROGRESS, TOOL_BATCH_COMPLETED, TOOL_CALL_RETRY_AUTHORIZED, TOOL_EXECUTION_STARTED,
@@ -281,6 +281,16 @@ public final class AgentSession {
         historicalEvidence.clear();
         append(EventType.HISTORICAL_EVIDENCE_CLEARED,Integer.toString(history.size()));
         checkpoint();
+    }
+
+    /** Durable PTC child audit without adding intermediate bodies to model history. */
+    public void recordPtcSubcall(EventType type, String detail, Object payload) {
+        if ((type != EventType.PTC_TOOL_CALL_STARTED && type != EventType.PTC_TOOL_CALL_COMPLETED)
+                || status != Status.WAITING_FOR_TOOL || pendingToolBatch == null || !pendingToolBatch.isInFlight()
+                || !pendingToolBatch.getCalls().get(pendingToolBatch.getNextCallIndex()).name().equals("run_code")) {
+            throw new IllegalStateException("PTC audit requires an active run_code execution");
+        }
+        append(type, detail, payload);
     }
 
     public Set<String> staleEvidenceIds() { return Set.copyOf(staleEvidenceIds); }

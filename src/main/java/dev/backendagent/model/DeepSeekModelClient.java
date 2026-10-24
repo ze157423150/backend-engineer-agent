@@ -659,6 +659,14 @@ public final class DeepSeekModelClient implements ModelClient {
             }
         }
 
+        if (request.availableTools().stream().anyMatch(t -> t.getName().equals("run_code"))) {
+            ObjectNode system = (ObjectNode) messages.get(0);
+            system.put("content", system.path("content").asText()
+                    + "\nrun_code为可选的只读Python程序编排入口，SDK在其定义中；搜索后提取、分页或过滤等有依赖的多步工作可用一个程序完成。"
+                    + "只需一个普通工具或已确定的独立调用可直接调用原工具，不强制写程序。文件修改与测试仍用普通工具。"
+                    + "程序中间结果只进归档，当前仅看最终返回；callCount不代表原始结果已全部展示，sources保留历史来源，历史内容需按时效使用。"
+                    + "失败子调用可捕获但failedCalls仍会报告；程序输出仅供参考，不是新的当前文件或测试证据。失败后核对错误，不无修改重跑；仅程序中显式调用的工具执行过。");
+        }
         if (request.availableTools().stream().anyMatch(t -> t.getName().equals("search_tools"))) {
             ObjectNode system = (ObjectNode) messages.get(0);
             system.put("content", system.path("content").asText()
