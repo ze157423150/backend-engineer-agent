@@ -15,7 +15,37 @@ public final class ToolResultCompressor {
                 original.readMetadata() == null ? null : original.readMetadata().excerpt()),
                 source.assistantContent(), source.modelCallNumber(), source.evidence());
     }
+    /** Pressure-only display projection. The durable program output remains intact. */
+    public ToolExchange pruneProgramOutput(ToolExchange source,int maxCharacters) {
+        if(source.isProgramChild() || !source.call().name().equals("run_code")
+                || source.result().content().length()<=maxCharacters)return source;
+        try {
+            var json=new com.fasterxml.jackson.databind.ObjectMapper();
+            var original=json.readTree(source.result().content());
+            if(!original.isObject() || !original.path("kind").asText().equals("program_result"))return source;
+            var view=((com.fasterxml.jackson.databind.node.ObjectNode)original).deepCopy();
+            var payload=json.createObjectNode();payload.set("result",view.remove("result"));payload.set("logs",view.remove("logs"));
+            String text=json.writeValueAsString(payload);
+            view.put("outputTruncated",true).put("archiveCallId",source.call().id())
+                    .put("notice","程序结果已节选，不能视为完整原文；用read_observation按原结果行号提取archiveCallId，修改文件仍需有效文件来源。");
+            view.put("outputExcerpt","");
+            if(json.writeValueAsString(view).length()>=maxCharacters)return source; // Never drop safety receipts to fit.
+            int low=0,high=text.length();String best=null;
+            while(low<=high) {
+                int amount=low+(high-low)/2,head=(amount*2)/3,tail=amount-head;
+                String excerpt=text.substring(0,head)+(amount<text.length()?"\n[中间省略]\n":"")+text.substring(text.length()-tail);
+                view.put("outputExcerpt",excerpt);String encoded=json.writeValueAsString(view);
+                if(encoded.length()<=maxCharacters){best=encoded;low=amount+1;}else high=amount-1;
+            }
+            if(best==null || best.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+                    >=source.result().content().getBytes(java.nio.charset.StandardCharsets.UTF_8).length)return source;
+            return new ToolExchange(source.call(),new ToolResult(source.result().successful(),best),source.assistantContent(),
+                    source.modelCallNumber(),source.evidence(),source.archivedBody(),source.parentCallId());
+        }catch(java.io.IOException invalid){return source;}
+    }
+
     public ToolExchange compress(ToolExchange source) {
+        if (source.isProgramChild()) return source;
         String raw = source.result().content();
         if (raw.length() <= 8192) { return source; }
         String marker = "\n[历史结果已节选；call_id=" + source.call().id()

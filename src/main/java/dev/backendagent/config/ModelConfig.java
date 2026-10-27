@@ -11,6 +11,7 @@ public final class ModelConfig {
     private final String modelName;
     private final Duration connectTimeout;
     private final Duration requestTimeout;
+    private final boolean ptcStrictToolCalls;
 
     public ModelConfig(String apiKey, URI baseUrl, String modelName,
                        Duration connectTimeout, Duration requestTimeout) {
@@ -22,12 +23,18 @@ public final class ModelConfig {
 
     public ModelConfig(String apiKey, URI baseUrl, String modelName, Duration connectTimeout, Duration requestTimeout,
                        dev.backendagent.model.RequestBudget requestBudget) {
+        this(apiKey, baseUrl, modelName, connectTimeout, requestTimeout, requestBudget, false);
+    }
+
+    public ModelConfig(String apiKey, URI baseUrl, String modelName, Duration connectTimeout, Duration requestTimeout,
+                       dev.backendagent.model.RequestBudget requestBudget, boolean ptcStrictToolCalls) {
         this.requestBudget = java.util.Objects.requireNonNull(requestBudget);
         this.apiKey = apiKey;
         this.baseUrl = baseUrl;
         this.modelName = modelName;
         this.connectTimeout = connectTimeout;
         this.requestTimeout = requestTimeout;
+        this.ptcStrictToolCalls = ptcStrictToolCalls;
     }
 
     public dev.backendagent.model.RequestBudget getRequestBudget() { return requestBudget; }
@@ -36,4 +43,5 @@ public final class ModelConfig {
     public String getModelName() { return modelName; }
     public Duration getConnectTimeout() { return connectTimeout; }
     public Duration getRequestTimeout() { return requestTimeout; }
+    public boolean isPtcStrictToolCalls() { return ptcStrictToolCalls; }
 }

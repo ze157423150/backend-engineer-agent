@@ -12,6 +12,13 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentConfigLoaderTest {
+    @Test void ptcStrictToolCallsIsExplicitAndRejectsInvalidBooleanValues() throws Exception {
+        var strict = AgentConfigLoader.load(write("model.api-key=test-key\nmodel.ptc-strict-tool-calls=true\n"), Map.of());
+        assertTrue(strict.isPtcStrictToolCalls());
+        assertFalse(AgentConfigLoader.load(write("model.api-key=test-key\n"), Map.of()).isPtcStrictToolCalls());
+        var invalid = write("model.api-key=test-key\nmodel.ptc-strict-tool-calls=yes\n");
+        assertThrows(IllegalArgumentException.class, () -> AgentConfigLoader.load(invalid, Map.of()));
+    }
     @TempDir
     Path directory;
 

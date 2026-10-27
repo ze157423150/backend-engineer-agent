@@ -5,7 +5,16 @@ import java.util.Objects;
 /** A call and its result travel together so context cannot accidentally orphan either one. */
 public record ToolExchange(ToolCall call, ToolResult result, String assistantContent, int modelCallNumber,
                            dev.backendagent.runtime.ObservationEvidence evidence,
-                           dev.backendagent.history.ArchivedBody archivedBody) {
+                           dev.backendagent.history.ArchivedBody archivedBody,
+                           @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                           String parentCallId) {
+    public ToolExchange(ToolCall call, ToolResult result, String assistantContent, int modelCallNumber,
+                        dev.backendagent.runtime.ObservationEvidence evidence,
+                        dev.backendagent.history.ArchivedBody archivedBody) {
+        this(call,result,assistantContent,modelCallNumber,evidence,archivedBody,null);
+    }
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public boolean isProgramChild() { return parentCallId != null; }
     public ToolExchange(ToolCall call, ToolResult result, String assistantContent, int modelCallNumber,
                         dev.backendagent.runtime.ObservationEvidence evidence) {
         this(call, result, assistantContent, modelCallNumber, evidence, null);
@@ -24,6 +33,8 @@ public record ToolExchange(ToolCall call, ToolResult result, String assistantCon
     public ToolExchange {
         Objects.requireNonNull(call);
         Objects.requireNonNull(result);
+        if (parentCallId != null && (parentCallId.isBlank() || !call.id().startsWith(parentCallId + ":ptc:")))
+            throw new IllegalArgumentException("Invalid program child provenance");
         // A positive number groups calls from one assistant message; zero is a standalone exchange.
         if (modelCallNumber < 0) {
             throw new IllegalArgumentException("Model call number must not be negative");

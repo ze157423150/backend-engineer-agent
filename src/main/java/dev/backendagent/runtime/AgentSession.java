@@ -18,7 +18,7 @@ public final class AgentSession {
 
     public enum EventType {
         CONVERSATION_COMPACTION_STARTED, CONVERSATION_COMPACTION_COMPLETED, CONVERSATION_COMPACTION_FAILED, CONVERSATION_SUMMARY_SKIPPED, CONVERSATION_SUMMARY_ATTEMPTED, SUMMARY_REFINEMENT_STARTED, SUMMARY_REFINEMENT_COMPLETED, USER_TURN_STARTED, SESSION_STARTED, REQUEST_BUDGET_CHECKED, COMPACTION_STARTED, COMPACTION_COMPLETED, COMPACTION_FAILED, CONTEXT_ASSEMBLED, MODEL_CALL_STARTED, MODEL_RESPONSE_RECEIVED, MODEL_CALL_FAILED, MODEL_RETRY_SCHEDULED,
-        TOOL_CALL_REQUESTED, TOOL_EXECUTION_SUCCEEDED, TOOL_EXECUTION_FAILED, WORKING_MEMORY_UPDATED, FILE_EVIDENCE_INVALIDATED,
+        PTC_TOOL_CALL_STARTED, PTC_TOOL_CALL_COMPLETED, TOOL_CALL_REQUESTED, TOOL_EXECUTION_SUCCEEDED, TOOL_EXECUTION_FAILED, WORKING_MEMORY_UPDATED, FILE_EVIDENCE_INVALIDATED,
         WORKSPACE_REVISION_ADVANCED, TEST_RESULT_RECORDED,
         WORKING_MEMORY_LOADED, HISTORY_BODIES_ARCHIVED, HISTORICAL_EVIDENCE_UPDATED, HISTORICAL_EVIDENCE_CLEARED, HISTORICAL_EVIDENCE_REMOVED, WINDOW_SUMMARY_ATTEMPTED, WINDOW_SUMMARY_SKIPPED, SESSION_RESUMED, SESSION_COMPLETED, SESSION_FAILED, BUDGET_EXHAUSTED,
         TOOL_BATCH_STARTED, TOOL_BATCH_PROGRESS, TOOL_BATCH_COMPLETED, TOOL_CALL_RETRY_AUTHORIZED, TOOL_EXECUTION_STARTED,
@@ -283,6 +283,22 @@ public final class AgentSession {
         checkpoint();
     }
 
+    /** Durable PTC child audit; the model adapter emits only outer program tool messages. */
+    public void recordPtcSubcall(EventType type, String detail, Object payload) {
+        if ((type != EventType.PTC_TOOL_CALL_STARTED && type != EventType.PTC_TOOL_CALL_COMPLETED)
+                || status != Status.WAITING_FOR_TOOL || pendingToolBatch == null || !pendingToolBatch.isInFlight()
+                || !pendingToolBatch.getCalls().get(pendingToolBatch.getNextCallIndex()).name().equals("run_code")) {
+            throw new IllegalStateException("PTC audit requires an active run_code execution");
+        }
+        append(type, detail, payload);
+    }
+
+    /** Program side effects are not automatically replayable, even when file hashes are unchanged. */
+    public boolean hasStartedPtcChildren(String parent) {
+        return events.stream().anyMatch(e -> e.type() == EventType.PTC_TOOL_CALL_STARTED
+                && e.detail().startsWith("parent=" + parent + ","));
+    }
+
     public Set<String> staleEvidenceIds() { return Set.copyOf(staleEvidenceIds); }
     void checkpoint() { eventSink.checkpoint(this); }
 
@@ -292,6 +308,10 @@ public final class AgentSession {
                 || (!failure.canResume() && !(retryInFlight && pendingToolBatch != null)))) {
             throw new IllegalStateException("Only budget stops or recoverable failed sessions can resume");
         }
+        if (pendingToolBatch != null && pendingToolBatch.isInFlight()
+                && pendingToolBatch.getCalls().get(pendingToolBatch.getNextCallIndex()).name().equals("run_code")
+                && hasStartedPtcChildren(pendingToolBatch.getCalls().get(pendingToolBatch.getNextCallIndex()).id()))
+            throw new IllegalStateException("Partially executed PTC program cannot be replayed; inspect saved child effects first");
         if (pendingToolBatch != null && pendingToolBatch.isInFlight() && (!retryInFlight || !inFlightRetryValidated)) {
             throw new IllegalStateException("In-flight tool requires explicit retry and verified unchanged workspace");
         }
@@ -727,7 +747,7 @@ public final class AgentSession {
             var evidence = new ObservationEvidence(ObservationEvidence.Type.FILE_CONTENT, exchange.call().id(),
                     exchange.result().fileFingerprint(), workspaceState.getRevision());
             return new ToolExchange(exchange.call(), exchange.result(), exchange.assistantContent(),
-                    exchange.modelCallNumber(), evidence);
+                    exchange.modelCallNumber(), evidence, null, exchange.parentCallId());
         }
         return exchange;
     }

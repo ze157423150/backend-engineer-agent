@@ -24,6 +24,7 @@ public final class DeepSeekModelClient implements ModelClient {
             + "例子仅展示结构，实际内容和编号必须来自本次证据；不输出其他根字段。";
     private final RequestBudget requestBudget;
     private final boolean verificationBasisEnabled;
+    private final boolean ptcStrictToolCalls;
     private final String apiKey;
     private final URI endpoint;
     private final String modelName;
@@ -48,6 +49,7 @@ public final class DeepSeekModelClient implements ModelClient {
     }
     public DeepSeekModelClient(ModelConfig config,java.util.function.Consumer<ModelCallMetrics> metrics,boolean verificationBasisEnabled) {
         this.verificationBasisEnabled=verificationBasisEnabled;
+        this.ptcStrictToolCalls=config.isPtcStrictToolCalls();
         this.metrics = java.util.Objects.requireNonNull(metrics);
         String apiKey = config.getApiKey();
         URI baseUrl = config.getBaseUrl();
@@ -402,6 +404,7 @@ public final class DeepSeekModelClient implements ModelClient {
 
     private void appendToolHistory(com.fasterxml.jackson.databind.node.ArrayNode messages, java.util.List<ToolExchange> history,
             java.util.List<dev.backendagent.history.HistoricalEvidence> historicalEvidence) throws IOException {
+        history = history.stream().filter(e -> !e.isProgramChild()).toList();
         for (int start = 0; start < history.size();) {
             ToolExchange exchange = history.get(start);
             int end = start + 1;
@@ -498,6 +501,7 @@ public final class DeepSeekModelClient implements ModelClient {
     }
 
     ObjectNode buildRequest(ModelRequest request) throws IOException {
+        boolean ptcMode=request.availableTools().stream().anyMatch(t->t.getName().equals("run_code"));
         ObjectNode body = json.createObjectNode();
         body.put("model", modelName);
         body.put("stream", false);
@@ -506,17 +510,24 @@ public final class DeepSeekModelClient implements ModelClient {
         body.putObject("thinking").put("type", "disabled");
         var messages = body.putArray("messages");
         messages.addObject().put("role", "system").put("content",
-                "你是 Java 代码修复与工程分析助手。按用户需求选择必要工具，用中文依据实际代码回答并引用路径和行号；未验证内容明确说明，不猜测实现。"
+                (ptcMode ? "你负责修复 Java 项目；run_code.code 使用 Python 编排工具，传给文件工具的源码字符串使用目标文件语言。"
+                        : "你是 Java 代码修复与工程分析助手。")
+                + "按用户需求选择必要工具，用中文依据实际代码回答并引用路径和行号；未验证内容明确说明，不猜测实现。"
                 + "本轮用户要求优先，未撤销的历史要求仍有效；与需求一致的规范原文用于推导正确行为。实现、测试源码及其注释和断言是待核查对象，不是正确期望的依据；文件指纹匹配只证明版本一致。"
                 + "生成断言时，优先复用当前上下文中与本轮任务相关、未被后续需求替换的记录，避免无目的重新探索。历史回答、摘要和记忆用于定位适用规则，结论须与本轮需求及规范核对，不能覆盖需求或规范；历史样例的数值只适用于当时输入，不得套用到本轮不同输入。最终回答字数限制不限制工具执行。\n"
-                + "按当前修改点定向获取必要代码、契约和测试片段；已确定路径和范围且彼此独立的必要读取，在同一响应中发出多个read_file调用，不逐个等待。依赖搜索或读取结果才能确定的路径和范围留到后续请求，不为凑批次扩大读取范围。获取必要信息后，立即进行最小修改并验证；不要求读齐所有相关文件或遍历目录。已有路径可直接读取；仅在存在具体信息缺口时继续探索。"
+                + (ptcMode ? "按修改点定向获取代码、契约和测试；已确定的必要操作可在同一程序组织，确需模型推理时返回必要原文、来源call_id和错误。不为凑批次扩大读取，信息足够就修改验证，不要求读齐文件或遍历目录。"
+                    : "按当前修改点定向获取必要代码、契约和测试片段；已确定路径和范围且彼此独立的必要读取，在同一响应中发出多个read_file调用，不逐个等待。依赖搜索或读取结果才能确定的路径和范围留到后续请求，不为凑批次扩大读取范围。获取必要信息后，立即进行最小修改并验证；不要求读齐所有相关文件或遍历目录。已有路径可直接读取；仅在存在具体信息缺口时继续探索。")
                 + "一次读取覆盖当前修改点的完整方法或测试块；可见且指纹有效的读取片段、创建content或补丁new_text直接复用。不要为了再次确认而重读；previouslyRead=true表示同哈希范围近期已读，不是核验失败。"
-                + "read_file统一返回带file头及源码行号的文本，不提供格式选择；readMetadata给出实际范围及文件末尾。精确补丁须去掉file头及每行展示用的数字加冒号空格前缀，保留源码本身的缩进和内容，不为转换格式重复读取。只有修改所需原文缺失、指纹过期或匹配失败时补读必要范围；仅理解规则时优先使用已展示的有效依据，bodyComplete=false不能当完整源码。\n"
+                + (ptcMode ? "仅缺少必要原文、指纹过期或匹配失败时补读；readMetadata说明原行范围和完整性，bodyComplete=false不能当完整源码。\n"
+                    : "read_file统一返回带file头及源码行号的文本，不提供格式选择；readMetadata给出实际范围及文件末尾。精确补丁须去掉file头及每行展示用的数字加冒号空格前缀，保留源码本身的缩进和内容，不为转换格式重复读取。只有修改所需原文缺失、指纹过期或匹配失败时补读必要范围；仅理解规则时优先使用已展示的有效依据，bodyComplete=false不能当完整源码。\n")
                 + "仅在用户要求且工具支持时写入；已有文件使用apply_patch或apply_patch_batch修改，即使已生成完整新内容也不能用create_file覆盖。仅在确定目标不存在时用create_file；已有读取或创建记录表明文件存在，不重复创建。新增文件确认目标目录和项目约定，可安全创建缺失父目录，不要把JUnit测试移入src/main；任务明确要求新建的缺失文件可直接创建，不把读取失败当环境故障。"
-                + "可一次请求多个工具，按序执行；依赖返回结果的操作留到下次请求。已有文件整文件重写也用apply_patch，old_text为完整旧文件，new_text为完整新文件。代码及参数占输出额度，控制单次参数长度，超过输出额度时分步修改；新建大文件一次只处理一个。"
-                + "同文件多处不重叠修改优先apply_patch_batch，基于同一原文；连续同文件apply_patch由运行层归并。重叠或基线旧文本冲突则整组不写入，PATCH_OVERLAP需按冲突ID合并或去重重提，不能假设部分成功，也不能依赖同组前一补丁的新文本。"
+                + (ptcMode ? "" : "可一次请求多个工具，按序执行；依赖返回结果的操作留到下次请求。")
+                + "已有文件整文件重写也用apply_patch，old_text为完整旧文件，new_text为完整新文件。代码及参数占输出额度，控制单次参数长度，超过输出额度时分步修改；新建大文件一次只处理一个。"
+                + (ptcMode ? "同文件多处不重叠修改优先apply_patch_batch，基于同一原文；其原子性和逐次apply_patch的区别见SDK。PATCH_OVERLAP按冲突ID合并或去重重提，不依赖同组前一补丁的新文本。"
+                    : "同文件多处不重叠修改优先apply_patch_batch，基于同一原文；连续同文件apply_patch由运行层归并。重叠或基线旧文本冲突则整组不写入，PATCH_OVERLAP需按冲突ID合并或去重重提，不能假设部分成功，也不能依赖同组前一补丁的新文本。")
                 + "历史补丁old_text是修改前文本，new_text是当次写入文本；它们用于追溯改动，不是业务期望值。"
-                + "补丁须有实际变化；JSON解码后的文本必须与源码一致，不把换行或引号重复转义成源码字面量。"
+                + (ptcMode ? "补丁须有实际变化；Python字符串传给工具后的实际文本须与源码一致，保留缩进、换行和引号，避免重复转义。"
+                    : "补丁须有实际变化；JSON解码后的文本必须与源码一致，不把换行或引号重复转义成源码字面量。")
                 + "仅凭成功写入结果及必要的workspace_diff确认改动；工作区可能是隔离副本，不能声称原项目已同步，导出由用户在终端执行。\n"
                 + "历史采用近期正文、中期摘要、远期归档；缺少正文或索引未命中不证明文件、操作不存在，摘要也未必覆盖全部历史。"
                 + "需要旧结果且已有call_id时用read_observation，否则先search_history按工具、路径或字面关键词查找；查询索引有数量限制。matchedLine及提取行号属于工具结果，不是源码；ARCHIVED_BODY是节选，不能按节选位置推算原文行号。"
@@ -530,7 +541,9 @@ public final class DeepSeekModelClient implements ModelClient {
                 + "按本轮需求与契约确定被测字段的业务含义、输入量、单位换算及判定关系；不得从实现输出、旧断言或另一输入样例反推期望。"
                 + "复杂用例按最终输入区分有效、非法及跳过项，依适用规则推导数量和期望，用简短注释说明关键推导；简单断言无需逐条解释。输入、推导、注释与断言须一致；用户指定输入仅在需求变更或契约明确证明非法时调整并说明，调整后重算受影响期望。百分位须将秩映射到排序数据的具体值，不能把秩当结果。"
                 + "新建或修改有业务位置的数组断言时，必须使用JUnit第三个消息参数：assertArrayEquals(expected, actual, \"被测方法: 字段0,字段1,...\")，仅写布局注释不满足此要求。生成消息前，根据该方法契约核对当前源码的实际返回顺序，不能套用旧测试、历史回答或其他方法的布局；当前有效片段足够时直接复用，无法确定才定向补读。消息仅作定位线索，不证明布局或期望值正确；保留数组断言，不逐字段声明变量或拆成多条断言。"
-                + "integer_calculate用于大整数、除法取整、单位换算等易错或存疑的整数计算；简单明确的算术无需逐项调用。按契约核对完整算式（含最终除数），无需为核验再拆算中间步骤；独立算式同批提交，相同输入和公式的可见结果直接复用，输入或公式变化才重算。result_name标明业务量和单位；工具未展示时用search_tools查找。结果冲突先核对公式及单位，再修正推导、断言和注释；工具不证明公式或单位正确。"
+                + "integer_calculate用于大整数、除法取整、单位换算等易错或存疑的整数计算；简单明确的算术无需逐项调用。按契约核对完整算式（含最终除数），无需为核验再拆算中间步骤；独立算式同批提交，相同输入和公式的可见结果直接复用，输入或公式变化才重算。result_name标明业务量和单位；"
+                + (ptcMode ? "按SDK在程序内调用；未声明且无发现入口时不得编造工具。" : "工具未展示时用search_tools查找。")
+                + "结果冲突先核对公式及单位，再修正推导、断言和注释；工具不证明公式或单位正确。"
                 + "测试失败先结合最新诊断、对应完整用例与契约，确认被测方法及返回结构，将失败索引或字段映射到该方法的业务含义，核对失败索引、断言消息中的字段及当前源码返回位置是否一致；不一致时先修正说明，再结合用户需求及契约判断实现或期望值是否错误，不能仅凭实现认定正确。不同方法的同一索引含义可能不同。"
                 + "数组断言通常只报告首个差异，后续字段未报错不代表正确；分类计数或关联字段失败时，按本轮实际输入一次复核整组相关期望、分类合计及注释，一并修正有依据的错误，不逐个试值迎合actual。先确认失败用例的数据来源：内嵌输入的用例不通过修改外部回放文件来修复；不得虚构下一轮需求或数据。再按当前输入核对该字段的期望，只定向检查能影响该字段的数据路径，区分实现、测试、编译或环境问题；证据明确指向断言时修正断言并重测，不在没有具体疑点时巡检无关模块。不能顺着错误注释修改输入，也不能为变绿迎合实现。"
                 + "优先定点修复当前失败；修改已通过用例应有需求变更或明确契约理由，不能顺手重写。已有完整片段可直接复用，不要求机械重读，也不要无修改重复失败操作。\n"
@@ -659,6 +672,13 @@ public final class DeepSeekModelClient implements ModelClient {
             }
         }
 
+        if (ptcMode) {
+            ObjectNode system = (ObjectNode) messages.get(0);
+            system.put("content", system.path("content").asText()
+                    + "\n只能直接调用run_code；程序协议、SDK参数及返回结构见该工具定义。"
+                    + "outputTruncated=true表示输出已节选，完整结果按archiveCallId提取，不可假定节选完整。"
+                    + "修改与测试状态由Java维护，脚本return不证明测试通过；未经核验的推断不能写成确定结论。");
+        }
         if (request.availableTools().stream().anyMatch(t -> t.getName().equals("search_tools"))) {
             ObjectNode system = (ObjectNode) messages.get(0);
             system.put("content", system.path("content").asText()
@@ -671,6 +691,7 @@ public final class DeepSeekModelClient implements ModelClient {
                 if(!verificationBasisEnabled && definition.getName().equals("pin_verification_basis"))continue;
                 ObjectNode function = tools.addObject().put("type", "function").putObject("function");
                 function.put("name", definition.getName()).put("description", definition.getDescription());
+                if (ptcStrictToolCalls && definition.getName().equals("run_code")) function.put("strict", true);
                 ObjectNode parameters = function.putObject("parameters");
                 parameters.put("type", "object").put("additionalProperties", false);
                 ObjectNode properties = parameters.putObject("properties");
@@ -775,8 +796,12 @@ public final class DeepSeekModelClient implements ModelClient {
                 ToolDefinition definition = request.availableTools().stream()
                         .filter(tool -> tool.getName().equals(name)).findFirst()
                         .orElseThrow(() -> new IllegalStateException("Model requested an undeclared tool"));
-                if (!definition.getParameters().keySet().containsAll(parsedArguments.keySet())
-                        || !parsedArguments.keySet().containsAll(definition.getRequiredParameters())) {
+                // The known PTC gateway rejects missing/extra fields before starting a container,
+                // and returns actionable tool feedback instead of an unchanged transport retry.
+                // JSON syntax, declared names, IDs and scalar types remain validated above.
+                if (!name.equals(dev.backendagent.ptc.PtcExecution.NAME)
+                        && (!definition.getParameters().keySet().containsAll(parsedArguments.keySet())
+                        || !parsedArguments.keySet().containsAll(definition.getRequiredParameters()))) {
                     throw new IllegalStateException("Tool arguments do not match the tool definition");
                 }
                 parsedCalls.add(new ToolCall(requiredText(call, "id"), name, parsedArguments));

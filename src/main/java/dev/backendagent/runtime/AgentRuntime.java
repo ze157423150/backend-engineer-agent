@@ -21,6 +21,7 @@ import static dev.backendagent.runtime.AgentSession.Status.*;
 /** Synchronous, single-worker runtime with an optional persistent session event sink. */
 public final class AgentRuntime {
     private dev.backendagent.selection.ToolDiscovery toolDiscovery;
+    private dev.backendagent.ptc.PtcExecution ptc;
     private final ModelClient model;
     private final boolean verificationBasisEnabled;
     private final Map<String, Tool> tools = new LinkedHashMap<>();
@@ -77,8 +78,17 @@ public final class AgentRuntime {
         }
     }
 
+    /** A selected PTC executor is the only model-visible tool transport. */
+    public AgentRuntime withPtc(dev.backendagent.ptc.PtcExecutor executor) {
+        if (executor == null) return this;
+        if (toolDiscovery != null) throw new IllegalArgumentException("PTC requires full tool definitions");
+        ptc = new dev.backendagent.ptc.PtcExecution(executor, tools.values(), this::executeProgramChild);
+        return this;
+    }
+
     /** Opt-in experiment; the default remains the complete catalog. */
     public AgentRuntime withToolSelection(boolean enabled) {
+        if (enabled && ptc != null) throw new IllegalArgumentException("PTC requires full tool definitions");
         toolDiscovery = enabled ? new dev.backendagent.selection.ToolDiscovery(
                 tools.values().stream().map(Tool::definition).toList()) : null;
         return this;
@@ -94,6 +104,7 @@ public final class AgentRuntime {
     }
 
     public AgentRuntime withToolSelection(dev.backendagent.selection.ToolSelector selector, int initialLimit) {
+        if (ptc != null) throw new IllegalArgumentException("PTC requires full tool definitions");
         toolDiscovery = new dev.backendagent.selection.ToolDiscovery(
                 tools.values().stream().map(Tool::definition).toList(), selector, initialLimit);
         return this;
@@ -101,14 +112,17 @@ public final class AgentRuntime {
 
     public AgentRuntime withToolSelection(dev.backendagent.selection.ToolSelector selector, int initialLimit,
             dev.backendagent.selection.ToolSearchRanker searchRanker) {
+        if (ptc != null) throw new IllegalArgumentException("PTC requires full tool definitions");
         toolDiscovery = new dev.backendagent.selection.ToolDiscovery(
                 tools.values().stream().map(Tool::definition).toList(), selector, initialLimit, searchRanker);
         return this;
     }
 
     private List<dev.backendagent.tools.ToolDefinition> definitions(AgentSession session) {
-        return toolDiscovery == null ? tools.values().stream().map(Tool::definition).toList()
-                : toolDiscovery.definitions(session);
+        if (ptc != null) return List.of(ptc.definition());
+        var definitions = new java.util.ArrayList<>(toolDiscovery == null
+                ? tools.values().stream().map(Tool::definition).toList() : toolDiscovery.definitions(session));
+        return List.copyOf(definitions);
     }
 
     public void run(AgentSession session) {
@@ -366,26 +380,10 @@ public final class AgentRuntime {
             // Save the pre-execution workspace hash; ambiguous changes cannot be silently replayed.
             session.checkpoint();
             session.append(TOOL_EXECUTION_STARTED, "callId=" + call.id(), session.pendingToolBatch());
-            ToolResult result = executeTool(call, session);
-            if (call.name().equals("run_tests")) {
-                result = withTestFailureGuidance(session, call, result);
-                result = new ToolResult(result.successful(), "workspaceRevision="
-                        + session.workspaceState().getRevision() + "\n" + result.content());
-            }
-            session.remember(new ToolExchange(call, result, batch.getAssistantContent(), batch.getModelCallNumber()));
+            ToolResult result = finishToolResult(call, session, executeTool(call, session));
+            recordToolEffects(session, new ToolExchange(call, result, batch.getAssistantContent(), batch.getModelCallNumber()));
             session.append(result.successful() ? TOOL_EXECUTION_SUCCEEDED : TOOL_EXECUTION_FAILED,
                     "callId=" + call.id() + ", content=" + result.content(), session.history().getLast());
-            var completed = session.history().getLast();
-            session.retainHistoricalEvidence(completed);
-            if (WorkspaceState.isSuccessfulWrite(completed)) {
-                session.append(WORKSPACE_REVISION_ADVANCED, "callId=" + call.id()
-                        + ", revision=" + session.workspaceState().getRevision()
-                        + ", testStatus=" + session.workspaceState().testStatus(), session.workspaceState());
-            } else if (call.name().equals("run_tests")) {
-                session.append(TEST_RESULT_RECORDED, "callId=" + call.id()
-                        + ", revision=" + session.workspaceState().getRevision()
-                        + ", testStatus=" + session.workspaceState().testStatus(), session.workspaceState());
-            }
             session.setPendingToolBatch(batch.completedOne());
             session.append(TOOL_BATCH_PROGRESS, "nextCallIndex=" + session.pendingToolBatch().getNextCallIndex(),
                     session.pendingToolBatch());
@@ -396,6 +394,52 @@ public final class AgentRuntime {
         session.append(TOOL_BATCH_COMPLETED, "call=" + session.modelCalls());
         session.releaseOldBodies();
         session.checkpoint();
+    }
+
+    private ToolResult finishToolResult(ToolCall call, AgentSession session, ToolResult result) {
+        if (call.name().equals("run_tests")) {
+            result = withTestFailureGuidance(session, call, result);
+            result = new ToolResult(result.successful(), "workspaceRevision="
+                    + session.workspaceState().getRevision() + "\n" + result.content());
+        }
+        return result;
+    }
+
+    private void recordToolEffects(AgentSession session, ToolExchange exchange) {
+        session.remember(exchange);
+        var call = exchange.call();
+        var completed = session.history().getLast();
+        session.retainHistoricalEvidence(completed);
+        if (WorkspaceState.isSuccessfulWrite(completed)) {
+            session.append(WORKSPACE_REVISION_ADVANCED, "callId=" + call.id()
+                    + ", revision=" + session.workspaceState().getRevision()
+                    + ", testStatus=" + session.workspaceState().testStatus(), session.workspaceState());
+        } else if (call.name().equals("run_tests")) {
+            session.append(TEST_RESULT_RECORDED, "callId=" + call.id()
+                    + ", revision=" + session.workspaceState().getRevision()
+                    + ", testStatus=" + session.workspaceState().testStatus(), session.workspaceState());
+        }
+    }
+
+    private ToolExchange executeProgramChild(AgentSession session, ToolCall call, String parent) {
+        var tool = tools.get(call.name());
+        ToolResult raw;
+        if (tool == null) raw = new ToolResult(false, "PTC_TOOL_NOT_ALLOWED: unknown or unavailable binding");
+        else if (!tool.definition().getParameters().keySet().containsAll(call.arguments().keySet())
+                || !call.arguments().keySet().containsAll(tool.definition().getRequiredParameters()))
+            raw = new ToolResult(false, programArgumentError(tool,call.arguments()));
+        else raw = executeRegisteredTool(call);
+        ToolResult result = finishToolResult(call, session, raw);
+        recordToolEffects(session, new ToolExchange(call,result,null,session.modelCalls(),null,null,parent));
+        return session.history().getLast();
+    }
+
+    private static String programArgumentError(Tool tool, java.util.Map<String,String> arguments) {
+        var missing=new java.util.TreeSet<>(tool.definition().getRequiredParameters());missing.removeAll(arguments.keySet());
+        var unexpected=new java.util.TreeSet<>(arguments.keySet());unexpected.removeAll(tool.definition().getParameters().keySet());
+        return "PTC_INVALID_TOOL_ARGUMENTS: " + tool.name() + "; missing=" + missing + "; unexpected=" + unexpected
+                + (tool.name().equals("search_history") ? "; 不限工具/路径时tool与path传空字符串；首次before_sequence=0。" : "；请使用SDK声明的参数。")
+                + "本次工具未执行，未产生修改。";
     }
 
     private static ToolResult withTestFailureGuidance(AgentSession session, ToolCall call, ToolResult result) {
@@ -436,8 +480,11 @@ public final class AgentRuntime {
         return report != null && !report.isWithinBudget();
     }
     private void requirePressureGain(AgentSession session,ContextSummary toolsSummary,ConversationSummary dialogue) {
-        var before=model.inspectRequest(pressureView(session,session.contextSummary(),session.conversationSummary()));
-        var after=model.inspectRequest(pressureView(session,toolsSummary,dialogue));
+        var assembler = new ContextAssembler(configuredHistoryBudget);
+        var before=model.inspectRequest(assembler.previewForRequestPressure(session,definitions(session),
+                maxModelCalls-session.modelCalls(),session.contextSummary(),session.conversationSummary()));
+        var after=model.inspectRequest(assembler.previewForRequestPressure(session,definitions(session),
+                maxModelCalls-session.modelCalls(),toolsSummary,dialogue));
         if(before!=null&&after!=null&&after.getRequestBytes()>=before.getRequestBytes())
             throw new IllegalArgumentException("Summary does not reduce outgoing request");
     }
@@ -512,6 +559,16 @@ public final class AgentRuntime {
             if (install) { session.installProjection(initial.contextProjection()); }
             return new PreparedContext(initial, configuredHistoryBudget, report);
         }
+        // First apply accepted summary coverage without shrinking the history allowance.
+        // This is the same projection used by the pressure-summary installation check.
+        var replacement = previewBudgetCandidate(session, definitions, remaining, summary, dialogueSummary, configuredHistoryBudget);
+        if (replacement != null) {
+            var replacementReport = model.inspectRequest(replacement);
+            if (replacementReport == null || replacementReport.isWithinBudget()) {
+                if (install) { session.installProjection(replacement.contextProjection()); }
+                return new PreparedContext(replacement, configuredHistoryBudget, replacementReport);
+            }
+        }
         // Search only the history allowance. Task, tools, memory, summary and newest batch are protected.
         PreparedContext best = null;
         var raw = session.history();
@@ -523,7 +580,7 @@ public final class AgentRuntime {
         }
         long minimumCharacters = initial.historyCharacters() - initial.contextProjection().getHistoryCharacters();
         var filtered = StaleObservationFilter.filter(raw).stream()
-                .map(new ToolResultCompressor()::prune).toList();
+                .map(e -> new ToolResultCompressor().pruneProgramOutput(new ToolResultCompressor().prune(e),4000)).toList();
         for (int i = latestStart; i < raw.size(); i++) { minimumCharacters += configuredHistoryBudget.measure(filtered.get(i)); }
         // Shrinking the suffix may hide a retrieved source and make its evidence cache visible.
         // Reserve all current evidence, subtracting the cache already included in the initial view.
@@ -564,7 +621,7 @@ public final class AgentRuntime {
             List<dev.backendagent.tools.ToolDefinition> definitions, int remaining, ContextSummary summary,
             ConversationSummary dialogueSummary, ContextBudget allowance) {
         try {
-            return new ContextAssembler(allowance).preview(session, definitions, remaining, summary, dialogueSummary);
+            return new ContextAssembler(allowance).previewForRequestPressure(session, definitions, remaining, summary, dialogueSummary);
         } catch (IllegalStateException failure) {
             String message = failure.getMessage();
             if (message != null && (message.startsWith("Latest tool batch exceeds history character budget;")
@@ -704,8 +761,14 @@ public final class AgentRuntime {
     }
 
     private ToolResult executeTool(ToolCall call, AgentSession session) {
+        if (ptc != null && call.name().equals(dev.backendagent.ptc.PtcExecution.NAME)) return ptc.execute(session, call);
+        if (ptc != null) return new ToolResult(false, "PTC_ONLY: 只能直接调用run_code；请在程序中await tools." + call.name() + "({...})，本次未执行。");
         if (toolDiscovery != null && call.name().equals(dev.backendagent.selection.ToolDiscovery.NAME))
             return toolDiscovery.search(session, call.arguments());
+        return executeRegisteredTool(call);
+    }
+
+    private ToolResult executeRegisteredTool(ToolCall call) {
         Tool tool = tools.get(call.name());
         if (tool == null) {
             return new ToolResult(false, "Unknown tool: " + call.name());

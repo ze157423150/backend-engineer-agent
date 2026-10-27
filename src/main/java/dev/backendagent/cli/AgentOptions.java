@@ -13,7 +13,7 @@ public final class AgentOptions {
                    [--config <properties-file>] [--max-model-calls <positive-integer>]
                    [--max-history-chars <positive-integer>] [--min-summary-input-chars <positive-integer>]
                    [--sandbox-image <local-image>] [--test-timeout-seconds <1-600>]
-                   [--tool-selection <all|rule|catalog>] [--data-dir <directory>] [--memory-from <uuid>]
+                   [--ptc <true|false>] [--ptc-image <local-image>] [--tool-selection <all|rule|catalog>] [--data-dir <directory>] [--memory-from <uuid>]
                    java -jar <jar> --resume-session <uuid> --workspace <directory>
                    [--max-model-calls <total-limit>] [--config <properties-file>] [--data-dir <directory>]
                    java -jar <jar> --resume-failed-session <uuid> --workspace <directory>
@@ -26,6 +26,8 @@ public final class AgentOptions {
                    java -jar <jar> --help
             """;
 
+    private boolean ptcEnabled = true;
+    private String ptcImage = dev.backendagent.ptc.DockerPtcExecutor.DEFAULT_IMAGE;
     private boolean toolSelection;
     private String toolSelectionMode = "all";
     private boolean interactive;
@@ -87,6 +89,8 @@ public final class AgentOptions {
         java.util.UUID exportSession = null;
         Path outputWorkspace = null;
         boolean interactive = false;
+        boolean ptcEnabled = true;
+        String ptcImage = dev.backendagent.ptc.DockerPtcExecutor.DEFAULT_IMAGE;
         boolean toolSelection = false;
         String toolSelectionMode = "all";
         var seen = new HashSet<String>();
@@ -102,6 +106,14 @@ public final class AgentOptions {
                 throw new IllegalArgumentException("Option value must not be blank or another option");
             }
             switch (option) {
+                case "--ptc" -> {
+                    if (!value.equals("true") && !value.equals("false")) throw new IllegalArgumentException("--ptc accepts true or false");
+                    ptcEnabled = Boolean.parseBoolean(value);
+                }
+                case "--ptc-image" -> {
+                    if (!value.matches("[A-Za-z0-9][A-Za-z0-9._/:@-]{0,200}")) throw new IllegalArgumentException("Invalid PTC image");
+                    ptcImage = value;
+                }
                 case "--tool-selection" -> {
                     if (!java.util.Set.of("rule", "all", "catalog").contains(value))
                         throw new IllegalArgumentException("--tool-selection accepts all, rule or catalog");
@@ -221,8 +233,12 @@ public final class AgentOptions {
         if (showSession == null && exportSession == null && (workspace == null || (resumeSession == null && resumeFailedSession == null && continueSession == null && task == null && !interactive))) {
             throw new IllegalArgumentException("Both --workspace and --task are required");
         }
+        if (ptcEnabled && !toolSelectionMode.equals("all")) throw new IllegalArgumentException("PTC requires --tool-selection all");
+        if (!ptcEnabled && seen.contains("--ptc-image")) throw new IllegalArgumentException("--ptc-image requires --ptc true");
         var options = new AgentOptions(workspace, task, configFile, maxModelCalls, maxHistoryCharacters, minimumSummaryInputCharacters, sandboxImage,
                 testTimeoutSeconds, dataDirectory, showSession, memoryFrom, resumeSession, exportSession, outputWorkspace);
+        options.ptcEnabled = ptcEnabled;
+        options.ptcImage = ptcImage;
         options.toolSelection = toolSelection;
         options.toolSelectionMode = toolSelectionMode;
         options.interactive = interactive;
@@ -231,6 +247,8 @@ public final class AgentOptions {
         return options;
     }
 
+    public boolean isPtcEnabled() { return ptcEnabled; }
+    public String getPtcImage() { return ptcImage; }
     public boolean isToolSelectionEnabled() { return toolSelection; }
     public String getToolSelectionMode() { return toolSelectionMode; }
     public boolean isInteractive() { return interactive; }

@@ -32,6 +32,91 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DeepSeekModelClientTest {
+    @Test void strictPtcConfigurationConstrainsOnlyTheGatewayAndKeepsBothFieldsRequired() throws Exception {
+        var config = new dev.backendagent.config.ModelConfig("test-key", java.net.URI.create("http://127.0.0.1:1"),
+                "test-model", Duration.ofSeconds(1), Duration.ofSeconds(1), new RequestBudget(65536,4096,1024), true);
+        var adapter = new DeepSeekModelClient(config);
+        var gateway = new dev.backendagent.ptc.PtcExecution((c,n,d) -> {throw new AssertionError();}, List.of(),
+                (s,c,p) -> {throw new AssertionError();});
+        var ptc = adapter.buildRequest(new ModelRequest("inspect", List.of(), List.of(gateway.definition()), 2));
+        var function = ptc.path("tools").get(0).path("function");
+        assertTrue(function.path("strict").asBoolean());
+        var required = new java.util.HashSet<String>(); function.path("parameters").path("required").forEach(n -> required.add(n.asText()));
+        assertEquals(java.util.Set.of("code","description"), required);
+        var nativeBody = adapter.buildRequest(new ModelRequest("inspect", List.of(), List.of(new ReadFileTool(null).definition()), 2));
+        assertFalse(nativeBody.path("tools").get(0).path("function").has("strict"));
+    }
+    @Test void ptcPromptKeepsDecisionGuidanceAndMovesExecutionContractToGateway() throws Exception {
+        var session = new AgentSession("inspect");
+        var tools = List.<Tool>of(new dev.backendagent.tools.ApplyPatchTool(null, session),
+                new dev.backendagent.tools.ApplyPatchBatchTool(null, session),
+                new dev.backendagent.tools.RememberFactTool(session), new ReadFileTool(null),
+                new dev.backendagent.tools.IntegerCalculateTool());
+        var gateway = new dev.backendagent.ptc.PtcExecution((code, names, dispatcher) -> {
+            throw new AssertionError("Prompt inspection must not run programs");
+        }, tools, (s, call, parent) -> { throw new AssertionError("No child calls"); });
+        var body = client(Duration.ofSeconds(5)).buildRequest(new ModelRequest("inspect", List.of(), List.of(gateway.definition()), 2));
+        String system = body.path("messages").get(0).path("content").asText();
+        String sdk = body.path("tools").get(0).path("function").path("description").asText();
+        assertTrue(system.contains("大整数、除法取整、单位换算"));
+        assertTrue(system.contains("result_name标明业务量和单位"));
+        assertTrue(system.contains("成功写入后必须测试当前源码快照"));
+        assertTrue(system.contains("本轮用户要求优先"));
+        assertTrue(system.contains("outputTruncated=true"));
+        assertTrue(system.contains("archiveCallId"));
+        assertFalse(system.contains("search_tools"));
+        assertFalse(system.contains("连续同文件apply_patch由运行层归并"));
+        assertFalse(system.contains("JSON解码后的文本"));
+        assertFalse(system.contains("ToolCallError")); // Execution rules have one owner.
+        assertTrue(sdk.contains("ToolCallError"));
+        assertTrue(sdk.contains("不盲目重放整段程序"));
+        assertTrue(sdk.contains("多个await apply_patch逐次提交，不自动归并或回滚"));
+        assertTrue(sdk.contains("可在同一程序后续调用"));
+        assertFalse(sdk.contains("下一轮再引用"));
+        assertFalse(sdk.contains("同一响应中连续同文件补丁会整组校验"));
+        assertTrue(sdk.contains("全部补丁按同一当前原文定位，先全量检查再原子写入"));
+        assertTrue(sdk.contains("按missing/unexpected修正参数"));
+        assertTrue(sdk.contains("code与description均必填"));
+    }
+
+    @Test void ptcSdkRetainsPerToolArgumentAndReturnDocumentation() throws Exception {
+        var session = new AgentSession("inspect");
+        var definitions = List.of(new ReadFileTool(null).definition(),
+                new dev.backendagent.tools.WorkspaceDiffTool(null).definition(),
+                new dev.backendagent.tools.SearchHistoryTool(new dev.backendagent.history.HistoryArchiveReader(
+                        dev.backendagent.history.ObservationArchive.inMemory(session), null)).definition(),
+                new dev.backendagent.tools.ApplyPatchBatchTool(null, session).definition(),
+                new dev.backendagent.tools.IntegerCalculateTool().definition());
+        String sdk = dev.backendagent.ptc.PtcSdk.render(definitions);
+        for (var definition : definitions) {
+            assertTrue(sdk.contains("async def " + definition.getName() + "("));
+            for (var parameter : definition.getParameters().entrySet()) {
+                assertTrue(sdk.contains("  " + parameter.getKey() + ": " + parameter.getValue()));
+                assertTrue(sdk.contains(parameter.getKey() + ": str | int"
+                        + (definition.getRequiredParameters().contains(parameter.getKey()) ? "" : " = ...")));
+            }
+        }
+        assertEquals(definitions.size(), sdk.split("  返回: ", -1).length - 1);
+        assertTrue(sdk.contains("patches需JSON字符串"));
+        assertTrue(sdk.contains("nextBeforeSequence=0表示无下一页"));
+        assertTrue(sdk.contains("value:十进制整数字符串"));
+        assertTrue(sdk.contains("每次最多200行"));
+        assertTrue(sdk.contains("不再次剥离"));
+    }
+
+    @Test void ptcChildBodiesAndArgumentsAreNotEncodedAsModelToolMessages() throws Exception {
+        var child = new ToolExchange(new ToolCall("p:ptc:run:1","read_file",java.util.Map.of("path","PRIVATE_ARGUMENT")),
+                new ToolResult(true,"PRIVATE_INTERMEDIATE_BODY"),null,1,null,null,"p");
+        var outer = new ToolExchange(new ToolCall("p","run_code",java.util.Map.of("code","return 1","description","inspect")),
+                new ToolResult(true,"FINAL_PROGRAM_RESULT"),null,1);
+        var body = client(Duration.ofSeconds(5)).buildRequest(new ModelRequest("inspect",List.of(child,outer),
+                List.of(new dev.backendagent.tools.ToolDefinition("run_code","program",java.util.Map.of("code","body","description","purpose"))),2));
+        String encoded=body.toString();
+        assertFalse(encoded.contains("PRIVATE_ARGUMENT"));assertFalse(encoded.contains("PRIVATE_INTERMEDIATE_BODY"));
+        assertTrue(encoded.contains("FINAL_PROGRAM_RESULT"));assertTrue(encoded.contains("只能直接调用run_code"));
+        assertEquals(1,body.path("tools").size());
+    }
+
     @Test void currentTurnWritePathsRemainInExistingValidationMessageWithNoVisibleToolBodies() throws Exception {
         var writes = dev.backendagent.runtime.TurnWriteSummary.fromHistory(List.of(
                 new ToolExchange(new ToolCall("write", "apply_patch", java.util.Map.of("path", "src/A.java")), new ToolResult(true, "written"))));
@@ -292,6 +377,38 @@ class DeepSeekModelClientTest {
         var failure = session.events().stream().filter(e -> e.type() == AgentSession.EventType.MODEL_CALL_FAILED).findFirst().orElseThrow();
         assertTrue(failure.detail().contains("INVALID_TOOL_ARGUMENTS"));
         assertEquals(1, session.events().stream().filter(e -> e.type() == AgentSession.EventType.TOOL_CALL_REQUESTED).count());
+    }
+
+    @Test
+    void missingPtcDescriptionReturnsToolFeedbackAndOnlyCorrectedProgramExecutes() throws Exception {
+        for(int n=0;n<2;n++) {
+            var response=(ObjectNode)json.readTree(toolResponse(n==0?"{\"code\":\"return 1\"}":"{\"code\":\"return 1\",\"description\":\"inspect\"}"));
+            var call=(ObjectNode)response.path("choices").get(0).path("message").path("tool_calls").get(0);
+            call.put("id","program-"+n);((ObjectNode)call.path("function")).put("name","run_code");responses.add(response.toString());
+        }
+        responses.add(finalResponse("done"));
+        var runs=new AtomicInteger();var session=new AgentSession("inspect");
+        new AgentRuntime(client(Duration.ofSeconds(5)),List.of(),4).withPtc((c,n,d)->{
+            runs.incrementAndGet();return new dev.backendagent.ptc.PtcRunResult(json.createObjectNode().put("done",true),List.of(),null);
+        }).run(session);
+        assertEquals(AgentSession.Status.COMPLETED,session.status());assertEquals(1,runs.get());
+        assertEquals(3,requests.size());assertNotEquals(requests.get(0),requests.get(1));
+        assertTrue(requests.get(1).toString().contains("missing=[description]"));
+        assertFalse(session.history().getFirst().result().successful());assertTrue(session.history().getLast().result().successful());
+        assertTrue(session.events().stream().noneMatch(e->e.type()==AgentSession.EventType.MODEL_CALL_FAILED));
+    }
+
+    @Test
+    void ptcMalformedJsonAndNonStringCodeStillFailProtocolValidation() throws Exception {
+        var definition=new dev.backendagent.tools.ToolDefinition("run_code","program",java.util.Map.of("code","body","description","purpose"));
+        for(String arguments:List.of("{bad-json","{\"code\":12,\"description\":\"inspect\"}")) {
+            var response=(ObjectNode)json.readTree(toolResponse(arguments));
+            ((ObjectNode)response.path("choices").get(0).path("message").path("tool_calls").get(0).path("function")).put("name","run_code");
+            responses.add(response.toString());
+            var error=assertThrows(ModelCallFailure.class,()->client(Duration.ofSeconds(5)).execute(
+                    new ModelRequest("inspect",List.of(),List.of(definition),1)));
+            assertEquals(ModelFailureDiagnostic.Code.INVALID_TOOL_ARGUMENTS,error.getDiagnostic().getCode());
+        }
     }
 
     @Test

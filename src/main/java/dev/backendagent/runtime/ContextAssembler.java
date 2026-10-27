@@ -9,6 +9,7 @@ import dev.backendagent.tools.ToolDefinition;
 public final class ContextAssembler {
     private final ContextBudget budget;
     private final boolean pressurePreview;
+    private final boolean boundedProgramOutput;
 
     public ContextAssembler() {
         this(new ContextBudget(ContextBudget.DEFAULT_MAX_HISTORY_CHARACTERS));
@@ -17,8 +18,14 @@ public final class ContextAssembler {
     public ContextAssembler(ContextBudget budget) {
         this(budget,false);
     }
-    private ContextAssembler(ContextBudget budget,boolean pressurePreview) {
+    private ContextAssembler(ContextBudget budget,boolean pressurePreview) { this(budget,pressurePreview,false); }
+    private ContextAssembler(ContextBudget budget,boolean pressurePreview,boolean boundedProgramOutput) {
         this.budget=java.util.Objects.requireNonNull(budget);this.pressurePreview=pressurePreview;
+        this.boundedProgramOutput=boundedProgramOutput;
+    }
+    public ModelRequest previewForRequestPressure(AgentSession session,List<ToolDefinition> tools,int remainingCalls,
+            ContextSummary summary,ConversationSummary dialogue) {
+        return new ContextAssembler(budget,false,true).preview(session,tools,remainingCalls,summary,dialogue);
     }
     public ModelRequest previewUntrimmed(AgentSession session,List<ToolDefinition> tools,int remainingCalls,
                                          ContextSummary summary,ConversationSummary dialogueSummary) {
@@ -53,8 +60,8 @@ public final class ContextAssembler {
         for(int pass=0;pass<=allEvidence.size()+1;pass++) {
             if(summaryCost>=budget.getMaxHistoryCharacters())
                 throw new IllegalStateException("Summary exceeds history budget; increase --max-history-chars");
-            projection=new ContextAssembler(new ContextBudget(budget.getMaxHistoryCharacters()-summaryCost),pressurePreview)
-                    .project(session.history(),7,summary==null?0:summary.getCoveredExchanges());
+            projection=new ContextAssembler(new ContextBudget(budget.getMaxHistoryCharacters()-summaryCost),pressurePreview,boundedProgramOutput)
+                    .project(session.history(),boundedProgramOutput?9:7,summary==null?0:summary.getCoveredExchanges());
             hiddenEvidence=dev.backendagent.history.HistoricalEvidenceArea.hiddenOnly(allEvidence,projection.getHistory());
             int nextCost=fixedCost+hiddenEvidence.stream().mapToInt(dev.backendagent.history.HistoricalEvidence::characterCount).sum();
             if(nextCost==summaryCost)break;
@@ -103,6 +110,11 @@ public final class ContextAssembler {
         boolean filterStale = policyVersion >= 2;
         var baseline = filterStale ? StaleObservationFilter.filter(raw) : raw;
         var history = new java.util.ArrayList<>(baseline);
+        if (policyVersion >= 8) {
+            int allowance=Math.max(512,Math.min(4000,budget.getMaxHistoryCharacters()/2));
+            var compressor=new ToolResultCompressor();
+            for(int i=0;i<history.size();i++)history.set(i,compressor.pruneProgramOutput(history.get(i),allowance));
+        }
         if (!pressurePreview && policyVersion >= 6 && baseline.stream().mapToLong(budget::measure).sum() > budget.getMaxHistoryCharacters()) {
             var pruner = new ToolResultCompressor();
             for (int i = 0; i < history.size(); i++) { history.set(i, pruner.prune(history.get(i))); }
@@ -125,6 +137,10 @@ public final class ContextAssembler {
         // Short histories stay complete if their filtered text fits. Distant history still
         // follows the archive policy, even when a stored excerpt would make it seem cheap.
         boolean retainShortHistory = policyVersion >= 4
+                // Under complete-request pressure, an accepted coverage frontier may
+                // replace old batches even when the tool-only character budget fits.
+                // Versions 1..8 retain their original checkpoint replay semantics.
+                && !(policyVersion >= 9 && summaryCoveredExchanges > 0)
                 && ContextWindowPolicy.suffixStart(raw, ContextWindowPolicy.RECENT_BATCHES
                     + ContextWindowPolicy.SUMMARY_BATCHES) == 0
                 && raw.stream().noneMatch(exchange -> exchange.archivedBody() != null)

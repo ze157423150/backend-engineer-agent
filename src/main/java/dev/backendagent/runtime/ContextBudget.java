@@ -18,6 +18,7 @@ public final class ContextBudget {
 
     // Java String.length(): UTF-16 code units. Includes fields and arguments, excludes JSON framing.
     public long measure(ToolExchange exchange) {
+        if (exchange.isProgramChild()) return 0; // Execution ledger only; not a model tool message.
         long size = exchange.call().id().length() + (long) exchange.call().name().length()
                 + exchange.result().content().length();
         if (exchange.assistantContent() != null) {
