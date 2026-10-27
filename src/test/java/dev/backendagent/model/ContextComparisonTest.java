@@ -190,11 +190,11 @@ class ContextComparisonTest {
                 assertTrue(Files.readString(root.resolve("Main.java")).contains("return 2;"));
                 assertEquals(1, restored.workspaceState().getRevision());
                 assertEquals(WorkspaceState.TestStatus.CURRENT_PASSED, restored.workspaceState().testStatus());
-                // Pressure can reject a source-valid summary with no outgoing-request gain;
+                // The formerly blocked valid summary now replaces covered short history;
                 // the deliberate malformed response must still be rejected independently.
                 var rejected=restored.events().stream().filter(event->event.type()==AgentSession.EventType.COMPACTION_FAILED).toList();
-                assertEquals(2,rejected.size());
-                assertEquals(1,rejected.stream().filter(e->e.detail().contains("NO_COMPRESSION_GAIN")).count());
+                assertEquals(1,rejected.size());
+                assertEquals(0,rejected.stream().filter(e->e.detail().contains("NO_COMPRESSION_GAIN")).count());
                 assertEquals(1,rejected.stream().filter(e->e.detail().contains("INVALID_JSON_STRUCTURE")).count());
                 long installed=restored.events().stream().filter(event->event.type()==AgentSession.EventType.COMPACTION_COMPLETED).count();
                 // Read display and prompt size affect when this fixed trace needs compression.

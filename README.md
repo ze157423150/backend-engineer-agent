@@ -19,9 +19,9 @@
 | 会话管理 | 列表、切换、新建与确认删除；历史、副本、摘要、调用额度及同步基准按 UUID 隔离 |
 | 模型失败处理 | 保存安全诊断，任务请求最多两次额外重试，计入累计调用预算 |
 
-`add_ptc` 分支提供可选的只读程序化工具调用实验：模型可通过 `run_code` 编排历史检索、旧消息提取和计算，普通工具继续全量展示。默认关闭，使用 `--ptc true` 显式启用；见 [PTC 实验说明](docs/PTC.md)。
+默认采用程序化工具调用：模型通过唯一入口 `run_code` 在隔离 Python 环境中编排现有工具，Java 统一维护文件证据、修改与测试状态，完整子调用保留供恢复和追溯；见 [PTC 说明](docs/PTC.md)。
 
-最新版本：[v2.2.0](https://github.com/ze157423150/backend-engineer-agent/releases/tag/v2.2.0) · [更新记录](CHANGELOG.md)
+最新版本：[v2.3.0](https://github.com/ze157423150/backend-engineer-agent/releases/tag/v2.3.0) · [更新记录](CHANGELOG.md)
 
 ## 快速开始
 
@@ -30,14 +30,15 @@
 ```bash
 mvn clean verify
 docker build -f sandbox/Dockerfile -t backend-agent-sandbox:local .
+docker build -f sandbox/ptc/Dockerfile -t backend-agent-ptc-runtime:local .
 cp agent-local.properties.example agent-local.properties
 ```
 
 配置文件已存在时跳过最后一步。在编辑器中填写 `agent-local.properties` 的 `model.api-key`，不要加引号。本地配置已被 Git 忽略；没有密钥时可以先查看帮助或运行普通回归测试。
 
 ```bash
-java -jar target/backend-engineer-agent-2.2.0.jar --help
-java -jar target/backend-engineer-agent-2.2.0.jar \
+java -jar target/backend-engineer-agent-2.3.0.jar --help
+java -jar target/backend-engineer-agent-2.3.0.jar \
   --interactive --workspace examples/test-repair \
   --config agent-local.properties --max-model-calls 60
 ```
@@ -47,7 +48,7 @@ java -jar target/backend-engineer-agent-2.2.0.jar \
 也保留单次任务入口：
 
 ```bash
-java -jar target/backend-engineer-agent-2.2.0.jar \
+java -jar target/backend-engineer-agent-2.3.0.jar \
   --workspace examples/test-repair \
   --task "先运行测试定位失败，修复Calculator.add实现，不修改现有测试预期，再运行测试并解释结果" \
   --config agent-local.properties \
@@ -101,7 +102,7 @@ flowchart TD
 
 ```bash
 SESSION_ID='替换为会话UUID'
-java -jar target/backend-engineer-agent-2.2.0.jar \
+java -jar target/backend-engineer-agent-2.3.0.jar \
   --workspace examples/test-repair --continue-session "$SESSION_ID" \
   --message "补充负数和零值测试，保留已有测试，然后运行测试" \
   --config agent-local.properties --max-model-calls 30
@@ -118,6 +119,8 @@ java -jar target/backend-engineer-agent-2.2.0.jar \
 ## 测试结果
 
 常规回归和 Docker 验证结果见[测试结果](docs/VALIDATION.md)。自动恢复评测执行器另有 14 项离线测试通过。
+
+**v2.3.0 PTC 配置完成64轮真实模型验证**：结合自动检查点恢复，64轮全部通过独立代码验收；累计512次 API 请求、7,000,466 Token，包含任务、摘要和失败尝试。61轮首次通过，3轮经自动回退重试后通过。[结果与统计口径](docs/VALIDATION.md)。
 
 **v2.2.0 全量工具配置完成6轮真实模型验证**：全部首次通过独立验收，共61次 API 请求、817,433 Token；相较本组旧全量版本前6轮记录，调用减少22.78%、总 Token 减少20.01%。[结果与统计口径](docs/VALIDATION.md)。
 

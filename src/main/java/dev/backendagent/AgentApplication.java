@@ -111,7 +111,8 @@ public final class AgentApplication {
                     new WorkspaceDiffTool(workspace), new RunTestsTool(workspace, sandbox));
             java.util.function.IntFunction<AgentRuntime> runtimeFactory = limit -> new AgentRuntime(model, tools, limit,
                     new ContextBudget(options.getMaxHistoryCharacters()), options.getMinimumSummaryInputCharacters(), System.out::println).withToolSelection(options.getToolSelectionMode())
-                        .withPtc(options.isPtcEnabled() ? new dev.backendagent.ptc.DockerPtcExecutor(options.getPtcImage()) : null);
+                        .withPtc(options.isPtcEnabled() ? new dev.backendagent.ptc.DockerPtcExecutor(options.getPtcImage(),
+                        java.time.Duration.ofSeconds(options.getTestTimeoutSeconds() + 60L)) : null);
 
             System.out.println("Session ID: " + session.id());
             System.out.println("Session files: " + store.sessionDirectory(session.id()));

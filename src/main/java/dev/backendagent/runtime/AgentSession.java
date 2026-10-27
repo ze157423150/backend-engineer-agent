@@ -283,7 +283,7 @@ public final class AgentSession {
         checkpoint();
     }
 
-    /** Durable PTC child audit without adding intermediate bodies to model history. */
+    /** Durable PTC child audit; the model adapter emits only outer program tool messages. */
     public void recordPtcSubcall(EventType type, String detail, Object payload) {
         if ((type != EventType.PTC_TOOL_CALL_STARTED && type != EventType.PTC_TOOL_CALL_COMPLETED)
                 || status != Status.WAITING_FOR_TOOL || pendingToolBatch == null || !pendingToolBatch.isInFlight()
@@ -291,6 +291,12 @@ public final class AgentSession {
             throw new IllegalStateException("PTC audit requires an active run_code execution");
         }
         append(type, detail, payload);
+    }
+
+    /** Program side effects are not automatically replayable, even when file hashes are unchanged. */
+    public boolean hasStartedPtcChildren(String parent) {
+        return events.stream().anyMatch(e -> e.type() == EventType.PTC_TOOL_CALL_STARTED
+                && e.detail().startsWith("parent=" + parent + ","));
     }
 
     public Set<String> staleEvidenceIds() { return Set.copyOf(staleEvidenceIds); }
@@ -302,6 +308,10 @@ public final class AgentSession {
                 || (!failure.canResume() && !(retryInFlight && pendingToolBatch != null)))) {
             throw new IllegalStateException("Only budget stops or recoverable failed sessions can resume");
         }
+        if (pendingToolBatch != null && pendingToolBatch.isInFlight()
+                && pendingToolBatch.getCalls().get(pendingToolBatch.getNextCallIndex()).name().equals("run_code")
+                && hasStartedPtcChildren(pendingToolBatch.getCalls().get(pendingToolBatch.getNextCallIndex()).id()))
+            throw new IllegalStateException("Partially executed PTC program cannot be replayed; inspect saved child effects first");
         if (pendingToolBatch != null && pendingToolBatch.isInFlight() && (!retryInFlight || !inFlightRetryValidated)) {
             throw new IllegalStateException("In-flight tool requires explicit retry and verified unchanged workspace");
         }
@@ -737,7 +747,7 @@ public final class AgentSession {
             var evidence = new ObservationEvidence(ObservationEvidence.Type.FILE_CONTENT, exchange.call().id(),
                     exchange.result().fileFingerprint(), workspaceState.getRevision());
             return new ToolExchange(exchange.call(), exchange.result(), exchange.assistantContent(),
-                    exchange.modelCallNumber(), evidence);
+                    exchange.modelCallNumber(), evidence, null, exchange.parentCallId());
         }
         return exchange;
     }

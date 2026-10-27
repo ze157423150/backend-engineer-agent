@@ -136,8 +136,8 @@ class ToolDiscoveryTest {
     }
     @Test void cliSelectionIsExplicitAndValidated() {
         assertFalse(AgentOptions.parse(new String[]{"--workspace","repo","--task","x"}).isToolSelectionEnabled());
-        assertTrue(AgentOptions.parse(new String[]{"--workspace","repo","--task","x","--tool-selection","rule"}).isToolSelectionEnabled());
-        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{"--workspace","repo","--task","x","--tool-selection","unknown"}));
+        assertTrue(AgentOptions.parse(new String[]{"--workspace","repo","--task","x","--ptc", "false", "--tool-selection","rule"}).isToolSelectionEnabled());
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse(new String[]{"--workspace","repo","--task","x","--ptc", "false", "--tool-selection","unknown"}));
     }
     @Test void unavailableToolRecoveryIsDurableAndTurnLocal() {
         var session = new AgentSession("定位方法"); var discovery = hidden();
@@ -310,9 +310,9 @@ class ToolDiscoveryTest {
     }
 
     @Test void cliCatalogModeIsDistinctFromLegacyRuleMode() {
-        var options = AgentOptions.parse(new String[]{"--workspace", "repo", "--task", "x", "--tool-selection", "catalog"});
+        var options = AgentOptions.parse(new String[]{"--workspace", "repo", "--task", "x", "--ptc", "false", "--tool-selection", "catalog"});
         assertEquals("catalog", options.getToolSelectionMode());
         assertTrue(options.isToolSelectionEnabled());
-        assertEquals("rule", AgentOptions.parse(new String[]{"--workspace", "repo", "--task", "x", "--tool-selection", "rule"}).getToolSelectionMode());
+        assertEquals("rule", AgentOptions.parse(new String[]{"--workspace", "repo", "--task", "x", "--ptc", "false", "--tool-selection", "rule"}).getToolSelectionMode());
     }
 }

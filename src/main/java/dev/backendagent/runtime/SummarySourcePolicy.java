@@ -6,6 +6,7 @@ import dev.backendagent.model.ToolExchange;
 public final class SummarySourcePolicy {
     private SummarySourcePolicy() { }
     public static boolean substantive(ToolExchange exchange) {
+        if (exchange.isProgramChild()) return false;
         return switch (exchange.call().name()) {
             case "search_history", "read_observation", "search_turns", "read_turn", "pin_verification_basis", "remember_fact" -> false;
             default -> true;

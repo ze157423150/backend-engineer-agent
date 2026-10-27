@@ -37,7 +37,10 @@ public final class ConversationCompactor {
         var turns=session.turns();
         int recent=Math.max(0,turns.size()-1-RECENT_TURNS),oldest=Math.max(0,recent-MIDDLE_TURNS);
         int covered=session.conversationSummary()==null?0:session.conversationSummary().getCoveredTurns();
-        int attempt=Math.max(covered,session.lastConversationSummaryAttemptEnd());
+        int attempted=pressure ? session.events().stream()
+                .filter(e->e.type()==AgentSession.EventType.CONVERSATION_SUMMARY_ATTEMPTED)
+                .mapToInt(e->Integer.parseInt(e.detail())).max().orElse(0) : session.lastConversationSummaryAttemptEnd();
+        int attempt=Math.max(covered,attempted);
         if (recent-attempt<(pressure?1:INTERVAL)) return null;
         int from=Math.max(covered,oldest);
         var input=new ArrayList<ConversationMessage>();
@@ -59,11 +62,16 @@ public final class ConversationCompactor {
         }
         if (input.isEmpty() || to<=attempt) return null;
         long characters=input.stream().mapToLong(m->m.content().length()).sum();
-        if (characters<minimumInputCharacters) {
-            session.append(AgentSession.EventType.CONVERSATION_SUMMARY_SKIPPED,Integer.toString(to));
-            session.checkpoint();return null;
+        if (characters<(pressure?Math.min(512,minimumInputCharacters):minimumInputCharacters)) {
+            if(session.lastConversationSummaryAttemptEnd()<to) {
+                session.append(AgentSession.EventType.CONVERSATION_SUMMARY_SKIPPED,Integer.toString(to));
+                session.checkpoint();
+            }
+            return null;
         }
-        return new ConversationSummaryRequest(session.currentTask(),visibleSummary(session.conversationSummary(),turns),from,to,4000,input);
+        long previous=session.conversationSummary()==null?0:session.conversationSummary().characterCount();
+        int target=pressure?(int)Math.min(4000,Math.max(256,(characters+previous)*3/4)):4000;
+        return new ConversationSummaryRequest(session.currentTask(),visibleSummary(session.conversationSummary(),turns),from,to,target,input);
     }
     public ConversationSummary validate(ConversationSummaryRequest request,List<SummaryNote> notes,AgentSession session) {
         int revision=session.conversationSummary()==null?1:session.conversationSummary().getRevision()+1;

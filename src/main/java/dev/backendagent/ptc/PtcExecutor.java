@@ -8,6 +8,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 public interface PtcExecutor {
     PtcRunResult run(String code, List<String> bindings, Dispatcher dispatcher);
 
+    default PtcRunResult runWithDefinitions(String code, List<dev.backendagent.tools.ToolDefinition> definitions, Dispatcher dispatcher) {
+        return run(code, definitions.stream().map(dev.backendagent.tools.ToolDefinition::getName).toList(), dispatcher);
+    }
+
     @FunctionalInterface
     interface Dispatcher {
         JsonNode call(String name, Map<String, String> arguments);

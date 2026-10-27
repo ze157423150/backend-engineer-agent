@@ -19,7 +19,7 @@ class PtcExecutionTest {
     private AgentRuntime runtime(AgentSession session, PtcExecutor executor, List<Tool> tools) {
         var calls = new AtomicInteger();
         return new AgentRuntime(request -> {
-            assertTrue(request.availableTools().stream().anyMatch(t -> t.getName().equals("integer_calculate")));
+            assertEquals(List.of("run_code"),request.availableTools().stream().map(ToolDefinition::getName).toList());
             assertTrue(request.availableTools().stream().anyMatch(t -> t.getName().equals("run_code")));
             return calls.getAndIncrement() == 0 ? ModelResponse.callTool(new ToolCall("program", "run_code",
                     Map.of("code", "return 1", "description", "验证程序编排"))) : ModelResponse.finish("done");
@@ -42,8 +42,8 @@ class PtcExecutionTest {
             };
             runtime(session,executor,List.of(new IntegerCalculateTool(),new SearchTurnsTool(session),new ReadTurnTool(session))).run(session);
             assertEquals(AgentSession.Status.COMPLETED,session.status());assertEquals(2,session.modelCalls());
-            assertEquals(1,session.history().size());
-            String body=session.history().getFirst().result().content();assertFalse(body.contains("SECRET_REFERENCE_"));
+            assertEquals(4,session.history().size());
+            String body=session.history().getLast().result().content();assertFalse(body.contains("SECRET_REFERENCE_"));
             assertEquals(3,json.readTree(body).path("callCount").asInt());
             var archived=new ArrayList<ToolExchange>();store.observationArchive(session).visit((seq,e)->archived.add(e));
             assertEquals(4,archived.size());assertTrue(archived.stream().anyMatch(e->e.call().name().equals("read_turn")&&e.result().content().contains("SECRET_REFERENCE_")));
@@ -51,7 +51,7 @@ class PtcExecutionTest {
         }
         try(var reopened=new FileSessionStore(data)) {
             var restored=reopened.openCompleted(id,workspace,10);
-            assertEquals(1,restored.history().size());assertEquals(AgentSession.Status.COMPLETED,restored.status());
+            assertEquals(4,restored.history().size());assertEquals(AgentSession.Status.COMPLETED,restored.status());
             var archived=new ArrayList<ToolExchange>();reopened.observationArchive(restored).visit((seq,e)->archived.add(e));assertEquals(4,archived.size());
         }
     }
@@ -61,13 +61,13 @@ class PtcExecutionTest {
         Tool write=new Tool(){public String name(){return "apply_patch";}public ToolResult execute(Map<String,String>a){writes.incrementAndGet();return new ToolResult(true,"changed");}};
         var session=new AgentSession("inspect");
         PtcExecutor executor=(code,names,dispatch)->{
-            assertFalse(names.contains("apply_patch"));
-            assertThrows(IllegalArgumentException.class,()->dispatch.call("apply_patch",Map.of()));
+            assertTrue(names.contains("apply_patch"));
+            assertThrows(IllegalArgumentException.class,()->dispatch.call("delete_everything",Map.of()));
             return new PtcRunResult(json.createObjectNode().put("handled",true),List.of(),null);
         };
         runtime(session,executor,List.of(new IntegerCalculateTool(),write)).run(session);
-        assertEquals(0,writes.get());var body=json.readTree(session.history().getFirst().result().content());
-        assertEquals("apply_patch",body.path("failedCalls").get(0).path("tool").asText());
+        assertEquals(0,writes.get());var body=json.readTree(session.history().getLast().result().content());
+        assertEquals("delete_everything",body.path("failedCalls").get(0).path("tool").asText());
         assertTrue(body.path("failedCalls").get(0).path("error").asText().contains("PTC_TOOL_NOT_ALLOWED"));
         assertEquals(0,session.workspaceState().getRevision());
     }
@@ -79,8 +79,8 @@ class PtcExecutionTest {
             return new PtcRunResult(json.createObjectNode().put("claimedSuccess",true),List.of(),null);
         };
         runtime(session,executor,List.of(new IntegerCalculateTool())).run(session);
-        assertFalse(session.history().getFirst().result().successful());
-        var body=json.readTree(session.history().getFirst().result().content());assertEquals("PTC_LIMIT_EXCEEDED",body.path("error").asText());
+        assertFalse(session.history().getLast().result().successful());
+        var body=json.readTree(session.history().getLast().result().content());assertEquals("PTC_LIMIT_EXCEEDED",body.path("error").asText());
         assertEquals(16,session.events().stream().filter(e->e.type()==AgentSession.EventType.PTC_TOOL_CALL_COMPLETED).count());
     }
 
@@ -93,11 +93,27 @@ class PtcExecutionTest {
         assertThrows(IllegalArgumentException.class,()->runtime.withToolSelection(new dev.backendagent.selection.RuleToolSelector(),8));
     }
 
-    @Test void cliDefaultsRemainNativeAndPtcRequiresExplicitFullTools() {
-        var normal=dev.backendagent.cli.AgentOptions.parse(new String[]{"--workspace",".","--task","inspect"});assertFalse(normal.isPtcEnabled());
+    @Test void cliDefaultsToPtcAndRequiresFullTools() {
+        var normal=dev.backendagent.cli.AgentOptions.parse(new String[]{"--workspace",".","--task","inspect"});assertTrue(normal.isPtcEnabled());
         var ptc=dev.backendagent.cli.AgentOptions.parse(new String[]{"--workspace",".","--task","inspect","--ptc","true"});assertTrue(ptc.isPtcEnabled());
         assertThrows(IllegalArgumentException.class,()->dev.backendagent.cli.AgentOptions.parse(new String[]{"--workspace",".","--task","inspect","--ptc","true","--tool-selection","catalog"}));
-        assertThrows(IllegalArgumentException.class,()->dev.backendagent.cli.AgentOptions.parse(new String[]{"--workspace",".","--task","inspect","--ptc-image","custom:local"}));
+        assertEquals("custom:local",dev.backendagent.cli.AgentOptions.parse(new String[]{"--workspace",".","--task","inspect","--ptc-image","custom:local"}).getPtcImage());
+    }
+
+    @Test void invalidEnvelopeArgumentsNeverStartTheProgramAndExplainTheSpecificField() {
+        var invalid=List.of(Map.of("code","return 1"),Map.of("description","inspect"),
+                Map.of("code","return 1","description","inspect","extra","x"),
+                Map.of("code","return 1","description",""),Map.of("code","return 1","description","x".repeat(101)),
+                Map.of("code","","description","inspect"),Map.of("code","x".repeat(32001),"description","inspect"));
+        var reasons=List.of("missing=[description]","missing=[code]","unexpected=[extra]","description:blank","description:too_long","code:blank","code:too_long");
+        for(int i=0;i<invalid.size();i++) {
+            var args=invalid.get(i);var step=new AtomicInteger();var session=new AgentSession("inspect");
+            new AgentRuntime(q->step.getAndIncrement()==0?ModelResponse.callTool(new ToolCall("p","run_code",args)):ModelResponse.finish("done"),List.of(),3)
+                    .withPtc((c,n,d)->{throw new AssertionError("Invalid arguments must never start a container");}).run(session);
+            String feedback=session.history().getFirst().result().content();assertTrue(feedback.contains(reasons.get(i)),feedback);
+            assertTrue(feedback.contains("程序未启动"));assertFalse(session.history().getFirst().result().successful());
+            if (i == 0) assertTrue(feedback.contains("保留原code，仅补齐同级description"));
+        }
     }
 
     @Test void commandProvidesNoHostMountOrNetworkAndImageIsHostControlled() {

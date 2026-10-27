@@ -42,7 +42,7 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
         visitObservations(id, expectedSequence, visitor, false);
     }
 
-    /** Restoration pairs only outer calls with checkpoint history; retrieval can include PTC children. */
+    /** Marked PTC ledger children participate in restore; legacy audit-only children remain retrieval-only. */
     private synchronized void visitObservations(UUID id, long expectedSequence,
             dev.backendagent.history.ObservationVisitor visitor, boolean includePtc) throws IOException {
         safeDirectory(id);
@@ -83,7 +83,8 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
                     var payload = switch (type) {
                         case "TOOL_EXECUTION_SUCCEEDED", "TOOL_EXECUTION_FAILED" -> event.path("payload");
                         case "WORKING_MEMORY_LOADED" -> event.path("payload").path("verifiedExchange");
-                        case "PTC_TOOL_CALL_COMPLETED" -> includePtc ? event.path("payload").path("exchange") : null;
+                        case "PTC_TOOL_CALL_COMPLETED" -> includePtc || event.path("payload").path("exchange").hasNonNull("parentCallId")
+                                ? event.path("payload").path("exchange") : null;
                         default -> null;
                     };
                     if (payload == null) { continue; }
@@ -517,7 +518,7 @@ public final class FileSessionStore implements SessionEventSink, AutoCloseable {
                 : dev.backendagent.runtime.SessionFailure.Boundary.BETWEEN_TOOLS;
         if (checkpoint.getFailure().getBoundary() != expectedBoundary) throw new IOException("Failure boundary disagrees with pending tool");
         if (saved.getModelCallNumber() != checkpoint.getModelCalls()) throw new IOException("Pending batch call number differs from checkpoint");
-        var completed = checkpoint.getHistory().stream().filter(e -> e.modelCallNumber() == saved.getModelCallNumber()).toList();
+        var completed = checkpoint.getHistory().stream().filter(e -> !e.isProgramChild() && e.modelCallNumber() == saved.getModelCallNumber()).toList();
         if (completed.size() != saved.getNextCallIndex()) throw new IOException("Pending cursor skips completed observations");
         for (int i = 0; i < completed.size(); i++) {
             if (!completed.get(i).call().equals(saved.getCalls().get(i))

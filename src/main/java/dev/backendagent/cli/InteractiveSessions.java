@@ -202,7 +202,8 @@ public final class InteractiveSessions {
                         new ApplyPatchTool(workspace, session), new CreateFileTool(workspace, session), new WorkspaceDiffTool(workspace), new RunTestsTool(workspace, sandbox));
                 IntFunction<AgentRuntime> runtime = cap -> new AgentRuntime(model, tools, cap,
                         new ContextBudget(options.getMaxHistoryCharacters()), options.getMinimumSummaryInputCharacters(), output::println).withToolSelection(options.getToolSelectionMode())
-                        .withPtc(options.isPtcEnabled() ? new dev.backendagent.ptc.DockerPtcExecutor(options.getPtcImage()) : null);
+                        .withPtc(options.isPtcEnabled() ? new dev.backendagent.ptc.DockerPtcExecutor(options.getPtcImage(),
+                        java.time.Duration.ofSeconds(options.getTestTimeoutSeconds() + 60L)) : null);
                 if (id == null && initialCreation && options.getMemoryFrom() != null) {
                     new dev.backendagent.memory.MemoryLoader().load(store, options.getMemoryFrom(), workspace, session);
                 }

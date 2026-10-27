@@ -59,7 +59,14 @@ public final class AgentConfigLoader {
                 seconds(properties, "model.request-timeout-seconds"),
                 new dev.backendagent.model.RequestBudget(integer(properties, "model.context-window-tokens", false),
                         integer(properties, "model.max-output-tokens", false),
-                        integer(properties, "model.safety-margin-tokens", true)));
+                        integer(properties, "model.safety-margin-tokens", true)),
+                booleanValue(properties, "model.ptc-strict-tool-calls"));
+    }
+
+    private static boolean booleanValue(Properties properties, String name) {
+        String value = properties.getProperty(name, "false").trim();
+        if (!value.equals("true") && !value.equals("false")) throw new IllegalArgumentException("Invalid boolean configuration: " + name);
+        return Boolean.parseBoolean(value);
     }
 
     private static void applyEnvironment(Properties properties, Map<String, String> environment,

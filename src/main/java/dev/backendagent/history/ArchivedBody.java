@@ -41,7 +41,7 @@ public final class ArchivedBody {
         return new ToolExchange(original.call(), new ToolResult(original.result().successful(), excerpt,
                 original.result().fileFingerprint(), original.result().historicalEvidence(),
                 original.result().readMetadata()==null?null:original.result().readMetadata().excerpt(), original.result().patchBaseFingerprint()), original.assistantContent(), original.modelCallNumber(),
-                original.evidence(), reference);
+                original.evidence(), reference, original.parentCallId());
     }
 
     public void verify(long sequence, ToolExchange original, ToolExchange saved) {

@@ -12,12 +12,43 @@ public final class HistoricalEvidenceArea {
         while (entries.size() > MAX_ENTRIES || characterCount() > MAX_CHARACTERS) { entries.remove(entries.keySet().iterator().next()); }
     }
     public static boolean originalVisible(HistoricalEvidence evidence,List<ToolExchange> visible) {
-        return visible.stream().anyMatch(e->e.call().id().equals(evidence.getSourceCallId())
+        return visible.stream().anyMatch(e->!e.isProgramChild() && e.call().id().equals(evidence.getSourceCallId())
                 && e.result().successful() && e.archivedBody()==null
                 && ArchivedBody.hash(e.result().content()).equals(evidence.getSourceBodySha256()));
     }
     public static List<HistoricalEvidence> hiddenOnly(List<HistoricalEvidence> evidence,List<ToolExchange> visible) {
-        return evidence.stream().filter(e->!originalVisible(e,visible)).toList();
+        return evidence.stream().filter(e->!originalVisible(e,visible) && !programDisplays(e,visible)).toList();
+    }
+    /** Deduplicate only an exact provenance-bearing copy; stale/changed currency must keep its current warning. */
+    private static boolean programDisplays(HistoricalEvidence evidence,List<ToolExchange> visible) {
+        if(evidence.getCurrentValidity()!=evidence.getValidityAtRetrieval())return false;
+        var json=new com.fasterxml.jackson.databind.ObjectMapper();
+        final com.fasterxml.jackson.databind.JsonNode expected;
+        try { expected=json.readTree(json.writeValueAsString(evidence)); }
+        catch(java.io.IOException invalid){return false;}
+        for(var e:visible) {
+            if(e.isProgramChild() || !e.call().name().equals("run_code"))continue;
+            try {
+                var body=json.readTree(e.result().content());
+                if(body.path("outputTruncated").asBoolean())continue;
+                if(containsEvidence(body,expected,json,0,new int[]{512}))return true;
+            }catch(java.io.IOException invalid){ /* Non-JSON or excerpt cannot prove duplication. */ }
+        }
+        return false;
+    }
+    private static boolean containsEvidence(com.fasterxml.jackson.databind.JsonNode node,com.fasterxml.jackson.databind.JsonNode expected,
+            com.fasterxml.jackson.databind.ObjectMapper json,int depth,int[] remaining) {
+        if(node==null || depth>10 || --remaining[0]<0)return false;
+        if(node.equals(expected))return true;
+        if(node.isContainerNode())for(var value:node)
+            if(containsEvidence(value,expected,json,depth+1,remaining))return true;
+        if(node.isTextual()) {
+            String text=node.asText().strip();
+            if(text.startsWith("{") || text.startsWith("["))try {
+                return containsEvidence(json.readTree(text),expected,json,depth+1,remaining);
+            }catch(java.io.IOException ignored){ }
+        }
+        return false;
     }
     public void removeSources(java.util.Set<String> ids){ids.forEach(entries::remove);}
     public void clear(){entries.clear();}

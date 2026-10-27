@@ -14,16 +14,16 @@ import dev.backendagent.sandbox.LocalProcessRunner;
 /** Fresh, networkless Python container. No repository, session directory or Docker socket is mounted. */
 public final class DockerPtcExecutor implements PtcExecutor {
     public static final String DEFAULT_IMAGE = "backend-agent-ptc-runtime:local";
-    public static final int MAX_OUTPUT_CHARS = 6000;
+    public static final int MAX_OUTPUT_CHARS = 24000;
     private static final int MAX_FRAME_BYTES = 256 * 1024;
     private static final ObjectMapper JSON = new ObjectMapper();
     private final String image;
     private final Duration timeout;
 
-    public DockerPtcExecutor(String image) { this(image, Duration.ofSeconds(60)); }
+    public DockerPtcExecutor(String image) { this(image, Duration.ofSeconds(180)); }
     public DockerPtcExecutor(String image, Duration timeout) {
         if (image == null || !image.matches("[A-Za-z0-9][A-Za-z0-9._/:@-]{0,200}")
-                || timeout == null || timeout.isNegative() || timeout.isZero() || timeout.compareTo(Duration.ofSeconds(120)) > 0)
+                || timeout == null || timeout.isNegative() || timeout.isZero() || timeout.compareTo(Duration.ofSeconds(900)) > 0)
             throw new IllegalArgumentException("Invalid PTC image or timeout");
         this.image = image; this.timeout = timeout;
     }
@@ -37,6 +37,15 @@ public final class DockerPtcExecutor implements PtcExecutor {
     }
 
     @Override public PtcRunResult run(String code, List<String> bindings, Dispatcher dispatcher) {
+        return runProgram(code, bindings, List.of(), dispatcher);
+    }
+
+    @Override public PtcRunResult runWithDefinitions(String code, List<dev.backendagent.tools.ToolDefinition> definitions, Dispatcher dispatcher) {
+        return runProgram(code, definitions.stream().map(dev.backendagent.tools.ToolDefinition::getName).toList(), definitions, dispatcher);
+    }
+
+    private PtcRunResult runProgram(String code, List<String> bindings,
+                                  List<dev.backendagent.tools.ToolDefinition> definitions, Dispatcher dispatcher) {
         String name = "backend-ptc-" + UUID.randomUUID();
         Process process = null;
         ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -59,6 +68,12 @@ public final class DockerPtcExecutor implements PtcExecutor {
             var output = new BufferedOutputStream(process.getOutputStream());
             var initial = JSON.createObjectNode().put("code", code);
             initial.set("bindings", JSON.valueToTree(bindings)); initial.put("maxOutputChars", MAX_OUTPUT_CHARS);
+            var contracts = initial.putObject("contracts");
+            for (var definition : definitions) {
+                var contract = contracts.putObject(definition.getName());
+                contract.set("parameters", JSON.valueToTree(definition.getParameters().keySet().stream().sorted().toList()));
+                contract.set("required", JSON.valueToTree(definition.getRequiredParameters().stream().sorted().toList()));
+            }
             send(output, initial);
             for (int frames = 0; frames < 34; frames++) {
                 JsonNode frame = read(input);
@@ -86,8 +101,12 @@ public final class DockerPtcExecutor implements PtcExecutor {
                     var fields = frame.path("arguments").fields();
                     while (fields.hasNext()) {
                         var field = fields.next(); var value = field.getValue();
+                        if (frame.path("tool").asText().equals("apply_patch_batch")
+                                && field.getKey().equals("patches") && value.isArray())
+                            throw new IllegalArgumentException("PTC_INVALID_TOOL_ARGUMENTS: apply_patch_batch.patches要求JSON数组字符串，不是Python列表；"
+                                    + "使用json.dumps(edits, ensure_ascii=False)。本次工具未执行；若原文仍有效，仅修正序列化，无需重复读取。");
                         if (args.size() >= 16 || field.getKey().length() > 100
-                                || !(value.isTextual() || value.isIntegralNumber()) || value.asText().length() > 8000)
+                                || !(value.isTextual() || value.isIntegralNumber()) || value.asText().length() > 24000)
                             throw new IllegalArgumentException("PTC_INVALID_TOOL_ARGUMENTS: string or integer scalar parameters only");
                         args.put(field.getKey(), value.asText());
                     }

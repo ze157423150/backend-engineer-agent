@@ -26,7 +26,7 @@ public final class AgentOptions {
                    java -jar <jar> --help
             """;
 
-    private boolean ptcEnabled;
+    private boolean ptcEnabled = true;
     private String ptcImage = dev.backendagent.ptc.DockerPtcExecutor.DEFAULT_IMAGE;
     private boolean toolSelection;
     private String toolSelectionMode = "all";
@@ -89,7 +89,7 @@ public final class AgentOptions {
         java.util.UUID exportSession = null;
         Path outputWorkspace = null;
         boolean interactive = false;
-        boolean ptcEnabled = false;
+        boolean ptcEnabled = true;
         String ptcImage = dev.backendagent.ptc.DockerPtcExecutor.DEFAULT_IMAGE;
         boolean toolSelection = false;
         String toolSelectionMode = "all";

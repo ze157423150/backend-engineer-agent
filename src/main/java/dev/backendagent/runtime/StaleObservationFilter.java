@@ -96,6 +96,7 @@ public final class StaleObservationFilter {
         var view = new ArrayList<ToolExchange>();
         for (int index = 0; index < raw.size(); index++) {
             var exchange = raw.get(index);
+            if (exchange.isProgramChild()) { view.add(exchange); continue; }
             // An intentional retrieval must reach the next model turn, with its historical warning.
             boolean explicitRetrieval = index >= newest && exchange.call().name().equals("read_observation");
             if (!stale.contains(exchange.call().id())) { view.add(exchange); continue; }
